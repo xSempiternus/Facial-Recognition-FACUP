@@ -349,6 +349,10 @@ CSS_KIOSKO = """
 /* ---------- Escáner ---------- */
 .st-key-k_cam {position: relative;}
 .st-key-k_cam [data-testid="stCameraInput"] {position: relative; background: transparent !important; box-shadow:none !important;}
+.st-key-k_cam [data-testid="stCameraInputWebcamComponent"] div {background-color: transparent !important;}
+/* La foto capturada cuelga de otro contenedor (blanco por defecto) */
+.st-key-k_cam [data-testid="stCameraInput"] div:has(> img) {background: transparent !important; border-radius: 34px !important;
+  overflow: hidden;}
 .st-key-k_cam [data-testid="stCameraInputWebcamComponent"] > div:not([data-testid]),
 .st-key-k_cam [data-testid="stCameraInputWebcamStyledBox"], .st-key-k_cam img {
   border-radius: 34px !important; overflow: hidden; background: #0c040e !important;

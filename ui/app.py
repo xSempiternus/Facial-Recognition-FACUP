@@ -4,9 +4,10 @@ import streamlit as st
 
 import core
 
-st.set_page_config(page_title="Asistencia Liga Infantil", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Asistencia · FA CUP Chile", page_icon="⚽", layout="wide")
 core.init_state()
 core.inject_css()
+st.logo(str(core.STATIC_DIR / "logo-blanco.png"), size="large")
 
 staff_ok = st.session_state.staff_ok
 # Sin sesión, las páginas del staff siguen registradas pero ocultas: un enlace directo o un F5

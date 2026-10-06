@@ -8,3 +8,4 @@ eval/resultados/
 !eval/fotos/.gitkeep
 .venv_old/
 .claude/
+config.local.bat

@@ -1,16 +1,37 @@
+[server]
+# Sirve ui/static/ en app/static/ (tipografía PlutoSans, logos y mascota del kiosko).
+enableStaticServing = true
+
+# Tipografía oficial FA CUP Chile (PlutoSans Condensed): títulos en mayúsculas.
+[[theme.fontFaces]]
+family = "PlutoSansCond"
+url = "app/static/fonts/PlutoSansCondBold.otf"
+weight = 700
+
+[[theme.fontFaces]]
+family = "PlutoSansCond"
+url = "app/static/fonts/PlutoSansCondRegular.otf"
+weight = 400
+
 [theme]
 base = "light"
-primaryColor = "#15803d"
-backgroundColor = "#f5f7fb"
+primaryColor = "#4B1F5C"              # morado FA CUP para acciones (texto blanco AAA)
+backgroundColor = "#f6f3f8"
 secondaryBackgroundColor = "#ffffff"
-textColor = "#0f172a"
+textColor = "#1D1D1B"
+linkColor = "#4B1F5C"
+# Cuerpo en Nunito (legible en tablas y formularios); títulos con la tipografía de la marca.
 font = "Nunito:https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap"
-headingFontWeights = [900, 800, 800]
+headingFont = "PlutoSansCond, 'Arial Narrow', sans-serif"
+headingFontWeights = [700, 700, 700]
 baseRadius = "0.9rem"
 buttonRadius = "0.9rem"
-borderColor = "#e2e8f0"
+borderColor = "#ece6f0"
 showWidgetBorder = true
-chartCategoricalColors = ["#15803d", "#ef4444", "#2563eb", "#f59e0b", "#8b5cf6"]
+greenColor = "#4B1F5C"                # "éxito" en morado de la marca (sin verde)
+violetColor = "#33173C"
+chartCategoricalColors = ["#4B1F5C", "#F5B400", "#7C6CFF", "#BE185D", "#0E7490"]
+yellowColor = "#F5B400"
 
 [browser]
 gatherUsageStats = false

@@ -44,6 +44,9 @@ uvicorn api.main:app
 streamlit run ui/app.py
 ```
 
+**PIN del staff:** copia `config.local.example.bat` como `config.local.bat` y cambia `STAFF_PIN`.
+`iniciar.bat` lo carga solo y el archivo no se sube a git.
+
 - UI: http://localhost:8501
 - API (documentación interactiva): http://127.0.0.1:8000/docs
 

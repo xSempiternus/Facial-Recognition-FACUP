@@ -5,7 +5,7 @@ import streamlit as st
 import core
 
 core.requerir_staff()
-core.header("Guía de estilo", "Reglas de Shopify Polaris + NHS, con identidad de fútbol infantil.",
+core.header("Guía de estilo", "Identidad FA CUP Chile + reglas de Shopify Polaris y NHS.",
             mostrar_estado=False)
 
 st.info("Esta página es la referencia para mantener la app coherente. Antes de agregar una pantalla nueva, "
@@ -24,18 +24,18 @@ with st.container(border=True):
 with st.container(border=True):
     st.markdown("#### :material/format_color_fill: Colores")
     colores = [
-        ("Verde cancha", "#15803d", "Acción principal, éxito. Texto blanco con contraste AA."),
-        ("Verde oscuro", "#14532d", "Borde táctil de botones, títulos del kiosko."),
-        ("Texto", "#0f172a", "Texto principal."),
-        ("Texto secundario", "#475569", "Descripciones y ayudas."),
+        ("Morado FA CUP", core.MORADO, "Marca: logo, títulos, cabecera y fondo del kiosko (facupchile.cl)."),
+        ("Morado acción", core.MORADO_2, "Botón principal. Texto blanco con contraste AAA."),
+        ("Dorado", core.DORADO, "Acento: brillo del escaneo, celebración y foco de teclado. Texto oscuro encima."),
+        ("Lavanda", core.LAVANDA, "Secundario: textos de apoyo y viñetas."),
         ("Atención", "#b45309", "Advertencias: algo requiere revisión."),
-        ("Peligro", "#b91c1c", "Errores y acciones destructivas."),
-        ("Información", "#1d4ed8", "Avisos neutros, estados informativos."),
-        ("Fondo", "#f5f7fb", "Fondo de las páginas del staff."),
+        ("Peligro", "#c62f3b", "Errores y acciones destructivas."),
+        ("Información", "#4f46e5", "Avisos neutros, estados informativos."),
+        ("Fondo", "#f6f3f8", "Fondo de las páginas del staff."),
     ]
     cols = st.columns(4)
     for i, (nombre, hexa, uso) in enumerate(colores):
-        borde = "border:1px solid #e2e8f0;" if hexa == "#f5f7fb" else ""
+        borde = "border:1px solid #e8e3ea;" if hexa == "#f6f3f8" else ""
         cols[i % 4].markdown(
             f'<div style="margin-bottom:14px"><div style="height:56px;border-radius:12px;background:{hexa};{borde}"></div>'
             f'<b>{nombre}</b> <code>{hexa}</code><div class="fc-muted" style="font-size:.85rem">{uso}</div></div>',
@@ -44,7 +44,8 @@ with st.container(border=True):
 # ------------------------------------------------------------------ botones
 with st.container(border=True):
     st.markdown("#### :material/smart_button: Botones")
-    st.caption("Todos los botones son «táctiles»: se hunden al apretarlos (estilo NHS), ideal para pantallas táctiles.")
+    st.caption("Botones planos con jerarquía clara: el principal en morado, el resto discreto. "
+               "El foco de teclado se marca con un anillo dorado.")
     a, b, c, d, e = st.columns(5)
     a.button("Inscribir", type="primary", icon=":material/person_add:", key="ej_pri", width="stretch")
     b.button("Ver jugadores", icon=":material/groups:", key="ej_sec", width="stretch")
@@ -96,24 +97,20 @@ with st.container(border=True):
 # ------------------------------------------------------------------ kiosko
 with st.container(border=True):
     st.markdown("#### :material/touch_app: Kiosko (niños)")
-    st.caption("Un mensaje enorme por pantalla, emoji grande y color con significado. Se reinicia solo. "
-               "Además, el kiosko saluda en voz alta (se puede apagar en los ajustes rápidos).")
+    st.caption("Modo oscuro con el morado FA CUP, marco de escaneo dorado y títulos en PlutoSans "
+               "mayúscula. Un mensaje enorme por pantalla y color con significado; se reinicia solo y saluda "
+               "en voz alta. La mascota reemplaza al emoji cuando está en ui/static/mascota/.")
     if st.button("Probar voz", icon=":material/record_voice_over:",
                  help="Útil para revisar que los parlantes del kiosko funcionen."):
         core.hablar("¡Hola, Sofía! ¡A jugar!")
     a, b, c, d = st.columns(4)
-    for col, (emoji, titulo, sub, color) in zip([a, b, c, d], [
-        ("🎉", "¡Hola, Sofía!", "¡A jugar!", core.VERDE),
-        ("👍", "¡Hola de nuevo!", "Ya estabas anotada", core.AZUL),
-        ("🙈", "No veo tu cara", "Acércate", core.NARANJA),
-        ("🤔", "No te reconozco", "Busca a tu entrenador", core.ROJO),
+    for col, args in zip([a, b, c, d], [
+        ("celebra", "🎉", "Registrada", "¡Hola, Sofía!", "¡A jugar!", core.EXITO),
+        ("de_nuevo", "👍", "Ya anotada", "¡Hola de nuevo!", "Ya estabas anotada", core.AZUL),
+        ("no_veo", "🙈", "Ups", "No veo tu cara", "Acércate", core.NARANJA),
+        ("no_reconoce", "🤔", "No te encontré", "No te reconozco", "Busca a tu entrenador", core.ROJO),
     ]):
-        with col:
-            st.markdown(
-                f'<div class="fc-result" style="background:{color};padding:18px 10px;border-radius:18px">'
-                f'<div class="emoji" style="font-size:44px">{emoji}</div>'
-                f'<div class="titulo" style="font-size:1.25rem">{titulo}</div>'
-                f'<div class="sub" style="font-size:.95rem">{sub}</div></div>', unsafe_allow_html=True)
+        col.markdown(f'<div class="fc-kdemo">{core.resultado_kiosko(*args)}</div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ íconos y tono
 with st.container(border=True):
@@ -122,7 +119,7 @@ with st.container(border=True):
         "- **Staff:** íconos monocromáticos Material (`:material/nombre:`), uno por concepto y siempre el mismo: "
         ":material/person_add: inscribir · :material/groups: jugadores · :material/fact_check: asistencia · "
         ":material/verified_user: autorización · :material/delete: eliminar · :material/download: descargar.\n"
-        "- **Kiosko:** emojis grandes y alegres: los niños los entienden sin leer.\n"
+        "- **Kiosko:** la mascota FA CUP (o emojis grandes mientras no esté): los niños la entienden sin leer.\n"
         "- **Tono:** cercano y directo, en segunda persona («Toma la foto», «Escribe el nombre»). "
         "Con los niños, festivo («¡A jugar!»); con el staff, claro y breve."
     )

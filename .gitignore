@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+data/*
+!data/.gitkeep
+eval/fotos/*
+eval/resultados/
+!eval/fotos/.gitkeep
+.venv_old/
+.claude/

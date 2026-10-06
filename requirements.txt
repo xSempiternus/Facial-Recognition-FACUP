@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+opencv-python>=4.9,<5  # OpenCV 5 eliminó los haarcascades que usa el detector "opencv"
+numpy>=1.26
+deepface[tensorflow]>=0.0.93
+tf-keras>=2.16
+streamlit>=1.46  # segmented_control y width="stretch"
+requests>=2.31
+pandas>=2.0

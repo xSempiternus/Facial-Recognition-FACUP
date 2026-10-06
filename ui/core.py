@@ -317,111 +317,120 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 </style>
 """
 
-# Kiosko: estética de app de reconocimiento facial (fondo nocturno, marco de escaneo con esquinas
-# doradas, guía ovalada para la cara y línea que recorre la imagen) con la marca FA CUP.
+# Kiosko estilo "Face ID" (referencia: Dribbble "AI Face Recognition — Biometric Mobile UI"): fondo monocromo
+# morado FA CUP casi negro con un halo central, líneas finas, anillo de marcas alrededor de la cara, arco de
+# escaneo luminoso, títulos grandes centrados y botón blanco tipo píldora. Un solo acento: dorado.
 CSS_KIOSKO = """
 <style>
 [data-testid="stApp"] {
   background:
-    radial-gradient(700px 500px at 80% 30%, rgba(245,180,0,.13), transparent 60%),
-    radial-gradient(700px 520px at 5% 100%, rgba(124,108,255,.16), transparent 60%),
-    radial-gradient(circle at 50% 54%, transparent 259px, rgba(255,255,255,.045) 260px 262px, transparent 263px),
-    linear-gradient(to right, transparent calc(50% - 1px), rgba(255,255,255,.045) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
-    radial-gradient(rgba(255,255,255,.08) 1.1px, transparent 1.6px) 0 0 / 24px 24px,
-    linear-gradient(155deg, #3a1a45 0%, var(--fc-morado) 35%, var(--fc-morado-noche) 85%) !important;
+    radial-gradient(ellipse 55% 60% at 50% 38%, rgba(120,62,140,.55), transparent 70%),
+    radial-gradient(ellipse 120% 90% at 50% 0%, #3a1846 0%, #24102b 45%, #0f0612 100%) !important;
   color: #fff;}
 [data-testid="stHeader"] {background: transparent !important; box-shadow: none !important;}
 [data-testid="stHeader"]::after {display: none;}
-.block-container {max-width: 1320px; padding-top: 4rem; padding-bottom: 1rem;}
+.block-container {max-width: 1360px; padding-top: 4.2rem; padding-bottom: .6rem;}
 .st-key-kiosko p, .st-key-kiosko label, .st-key-kiosko [data-testid="stMarkdownContainer"] {color: #fff;}
+.st-key-kiosko {--anillo: var(--fc-dorado);}
 
-/* ---------- Barra de estado: en vivo · llegadas de hoy · fecha ---------- */
-.fc-k-top {display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap;}
-.fc-k-chip {display:inline-flex; align-items:center; gap:8px; padding: 7px 14px; border-radius:999px;
-            background: rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.13); font-weight:800;
-            font-size:.82rem; letter-spacing:.1em; text-transform:uppercase; color:#fff; backdrop-filter: blur(8px);}
-.fc-k-chip b {color: var(--fc-dorado-claro); font-size: 1rem; letter-spacing: 0;}
-.fc-k-chip i {width:9px; height:9px; border-radius:50%; background: #3ddc84;
-              box-shadow: 0 0 0 0 rgba(61,220,132,.7); animation: fc-pulso 1.8s infinite;}
-@keyframes fc-pulso {70% {box-shadow: 0 0 0 10px rgba(61,220,132,0);} 100% {box-shadow: 0 0 0 0 rgba(61,220,132,0);}}
-.st-key-kiosko [data-testid="stPopover"] button {background: rgba(255,255,255,.07) !important;
-            border:1px solid rgba(255,255,255,.16) !important; color:#fff !important; box-shadow:none !important;}
+/* ---------- Título centrado ---------- */
+.fc-k-cab {text-align:center; padding: 0 8px 12px; animation: fc-sube .35s ease-out;}
+.fc-k-cab .etiqueta {display:inline-flex; align-items:center; gap:8px; margin-bottom: 8px; padding: 5px 13px;
+  border-radius:999px; border: 1px solid color-mix(in srgb, var(--tono) 60%, transparent);
+  background: color-mix(in srgb, var(--tono) 18%, transparent); color: #fff;
+  font-weight:800; font-size:.78rem; letter-spacing:.14em; text-transform:uppercase;}
+.fc-k-cab .etiqueta::before {content:""; width:7px; height:7px; border-radius:50%; background: var(--tono);
+  box-shadow: 0 0 10px var(--tono);}
+.fc-k-cab .titulo {font-family: var(--fc-display); font-weight:700; text-transform:none; color:#fff !important;
+  font-size: clamp(2rem, 2.9vw, 2.9rem); line-height: 1; margin: 0; padding: 0; letter-spacing: -.005em;}
+.fc-k-cab p {margin: 8px auto 0; max-width: 36ch; color: rgba(255,255,255,.62); font-size: 1.12rem; line-height:1.4;}
+@keyframes fc-sube {from {transform: translateY(8px); opacity: 0;} to {transform: none; opacity: 1;}}
 
-/* ---------- Saludo ---------- */
-.fc-k-saludo {padding: 6px 4px;}
-.fc-eyebrow {display:inline-flex; align-items:center; gap:10px; font-family: var(--fc-display); font-weight:700;
-             letter-spacing:.3em; text-transform:uppercase; font-size: .95rem; color: var(--fc-dorado);}
-.fc-eyebrow::before {content:""; width: 28px; height: 3px; border-radius: 3px; background: var(--fc-degradado);}
-.fc-k-titulo {font-family: var(--fc-display); font-weight:700; text-transform:uppercase; color:#fff;
-              font-size: clamp(3rem, 5.8vw, 5.2rem); line-height:.9; margin: 8px 0 12px; letter-spacing:.005em;}
-.fc-k-titulo em {font-style:normal; background: var(--fc-degradado); -webkit-background-clip:text; background-clip:text;
-                 color: transparent; filter: drop-shadow(0 0 26px rgba(245,180,0,.35));}
-.fc-k-pasos {display:flex; flex-direction:column; gap:8px; margin-top: 4px; max-width: 520px;}
-.fc-k-paso {display:flex; align-items:center; gap:14px; padding: 10px 14px; border-radius: 16px;
-            background: linear-gradient(90deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
-            border:1px solid rgba(255,255,255,.09); font-size: 1.18rem; font-weight:800; color:#fff;}
-.fc-k-paso b {display:grid; place-items:center; flex: 0 0 36px; height:36px; border-radius: 11px;
-              background: var(--fc-degradado); color: var(--fc-dorado-texto); font-family: var(--fc-display);
-              font-size:1.35rem; box-shadow: 0 6px 18px -4px rgba(245,180,0,.55);}
-.fc-k-lema {margin-top: 12px; font-family: var(--fc-display); text-transform:uppercase; letter-spacing:.24em;
-            color: rgba(255,255,255,.38); font-size:.9rem;}
-
-/* ---------- Marco de escaneo sobre la cámara ---------- */
-.st-key-k_cam {position: relative; padding: 14px; border-radius: 30px;
-  background: linear-gradient(180deg, rgba(255,255,255,.09), rgba(255,255,255,.025));
-  border: 1px solid rgba(255,214,107,.28);
-  box-shadow: 0 40px 90px -20px rgba(0,0,0,.6), 0 0 80px -20px rgba(245,180,0,.35), inset 0 1px 0 rgba(255,255,255,.14);
-  backdrop-filter: blur(12px);}
+/* ---------- Escáner ---------- */
+.st-key-k_cam {position: relative;}
 .st-key-k_cam [data-testid="stCameraInput"] {position: relative; background: transparent !important; box-shadow:none !important;}
-.st-key-k_cam video, .st-key-k_cam img {border-radius: 20px !important;}
 .st-key-k_cam [data-testid="stCameraInputWebcamComponent"] > div:not([data-testid]),
-.st-key-k_cam [data-testid="stCameraInputWebcamStyledBox"] {background: rgba(8,2,10,.6) !important;
-  border-radius: 20px; color: rgba(255,255,255,.7);}
+.st-key-k_cam [data-testid="stCameraInputWebcamStyledBox"], .st-key-k_cam img {
+  border-radius: 34px !important; overflow: hidden; background: #0c040e !important;
+  border: 1px solid rgba(255,255,255,.08); color: rgba(255,255,255,.6);
+  box-shadow: 0 40px 90px -30px rgba(0,0,0,.85), 0 0 0 8px rgba(255,255,255,.025);}
+.st-key-k_cam video, .st-key-k_cam img {width: 100% !important; height: min(50vh, 410px) !important;
+  object-fit: cover !important; border-radius: 34px !important; display: block;}
+.st-key-k_cam [data-testid="stCameraInputWebcamComponent"] div:has(> img) {border-radius: 34px; overflow: hidden;
+  background: #0c040e !important;}
 .st-key-k_cam [data-testid="stCameraInputWebcamComponent"] a {color: var(--fc-dorado-claro) !important;}
-/* Esquinas doradas (4 escuadras dibujadas con degradados) */
-.st-key-k_cam::before {content:""; position:absolute; z-index:5; pointer-events:none;
-  inset: 28px 28px 104px 28px;
-  --c: var(--fc-dorado); --l: 56px; --w: 5px;
-  background:
-    linear-gradient(var(--c),var(--c)) top left / var(--l) var(--w),
-    linear-gradient(var(--c),var(--c)) top left / var(--w) var(--l),
-    linear-gradient(var(--c),var(--c)) top right / var(--l) var(--w),
-    linear-gradient(var(--c),var(--c)) top right / var(--w) var(--l),
-    linear-gradient(var(--c),var(--c)) bottom left / var(--l) var(--w),
-    linear-gradient(var(--c),var(--c)) bottom left / var(--w) var(--l),
-    linear-gradient(var(--c),var(--c)) bottom right / var(--l) var(--w),
-    linear-gradient(var(--c),var(--c)) bottom right / var(--w) var(--l);
-  background-repeat: no-repeat; filter: drop-shadow(0 0 8px rgba(245,180,0,.85));}
-/* Guía ovalada: dónde poner la cara */
-.st-key-k_cam [data-testid="stCameraInput"]::before {content:""; position:absolute; z-index:4; pointer-events:none;
-  left: 50%; top: calc((100% - 90px) / 2); width: 38%; aspect-ratio: 3 / 4; transform: translate(-50%, -50%);
-  border: 2px dashed rgba(255,255,255,.38); border-radius: 50%;
-  box-shadow: 0 0 0 9999px rgba(8,2,10,.18);}
-/* Línea de escaneo que sube y baja */
-.st-key-k_cam::after {content:""; position:absolute; z-index:6; pointer-events:none; left: 10%; right: 10%; height: 2px;
-  top: 40px; border-radius: 2px;
-  background: linear-gradient(90deg, transparent, var(--fc-dorado), #fff, var(--fc-dorado), transparent);
-  box-shadow: 0 0 20px 5px rgba(245,180,0,.45); animation: fc-escaneo 3s ease-in-out infinite alternate;}
-@keyframes fc-escaneo {to {top: calc(100% - 120px);}}
-.st-key-k_cam:has(img)::after {animation-duration: .7s;}
-/* Botón de la cámara: grande, dorado y en español */
-.st-key-k_cam [data-testid="stCameraInput"] button {
-  background: var(--fc-degradado) !important; border: 0 !important; border-radius: 18px !important;
-  min-height: 66px; margin-top: 14px; font-size: 0 !important; position: relative; overflow: hidden;
-  box-shadow: 0 14px 30px -10px rgba(245,180,0,.7), inset 0 1px 0 rgba(255,255,255,.5) !important;}
-.st-key-k_cam [data-testid="stCameraInput"] button:hover {filter: brightness(1.05);}
-.st-key-k_cam [data-testid="stCameraInput"] button * {display:none;}
-.st-key-k_cam [data-testid="stCameraInput"] button::after {content: "¡Escanéame!"; font-size: 1.75rem;
-  font-family: var(--fc-display); font-weight:700; letter-spacing:.1em; text-transform:uppercase;
-  color: var(--fc-dorado-texto);}
-.st-key-k_cam [data-testid="stCameraInput"]:has(img) button::after {content: "Escaneando…";}
-.st-key-k_cam [data-testid="stCameraInput"]:has(img)::before {display: none;}
+/* Viñeta sobre el video para que las líneas se lean */
+.st-key-k_cam [data-testid="stCameraInputWebcamStyledBox"] {position: relative;}
+.st-key-k_cam [data-testid="stCameraInputWebcamStyledBox"]::after {content:""; position:absolute; inset:0; pointer-events:none;
+  background: radial-gradient(ellipse 70% 75% at 50% 45%, transparent 55%, rgba(15,6,18,.65) 100%);}
 
-.st-key-kiosko .fc-cargando .txt {color:#fff; font-family: var(--fc-display); text-transform:uppercase;
-  letter-spacing:.24em; font-size: 1.3rem;}
-.st-key-kiosko [data-testid="stProgress"] p {color: rgba(255,255,255,.75) !important; font-weight:800;}
-.st-key-kiosko [data-testid="stProgress"] > div > div > div {background: rgba(255,255,255,.12) !important;}
-.st-key-kiosko [data-testid="stProgress"] > div > div > div > div {background: var(--fc-degradado) !important;}
+/* Esquinas finas y discretas */
+.st-key-k_cam::before {content:""; position:absolute; z-index:5; pointer-events:none; inset: 34px 34px 112px 34px;
+  --c: rgba(255,255,255,.42); --l: 44px; --w: 2px;
+  background:
+    linear-gradient(var(--c),var(--c)) top left / var(--l) var(--w), linear-gradient(var(--c),var(--c)) top left / var(--w) var(--l),
+    linear-gradient(var(--c),var(--c)) top right / var(--l) var(--w), linear-gradient(var(--c),var(--c)) top right / var(--w) var(--l),
+    linear-gradient(var(--c),var(--c)) bottom left / var(--l) var(--w), linear-gradient(var(--c),var(--c)) bottom left / var(--w) var(--l),
+    linear-gradient(var(--c),var(--c)) bottom right / var(--l) var(--w), linear-gradient(var(--c),var(--c)) bottom right / var(--w) var(--l);
+  background-repeat: no-repeat;}
+
+/* Anillo de marcas alrededor de la cara (como Face ID): gira lento en espera y rápido al escanear */
+.st-key-k_cam [data-testid="stCameraInput"]::before {content:""; position:absolute; z-index:6; pointer-events:none;
+  left: 50%; top: calc((100% - 82px) / 2); width: min(52%, 330px); aspect-ratio: 1 / 1.12;
+  translate: -50% -50%; border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--anillo), color-mix(in srgb, var(--anillo) 20%, transparent) 55%, var(--anillo));
+  -webkit-mask: repeating-conic-gradient(#000 0 1.5deg, transparent 1.5deg 4.6deg),
+                radial-gradient(farthest-side, transparent calc(100% - 13px), #000 calc(100% - 12px));
+  -webkit-mask-composite: source-in; mask-composite: intersect;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--anillo) 70%, transparent));
+  animation: fc-gira 9s linear infinite;}
+@keyframes fc-gira {to {rotate: 360deg;}}
+.st-key-k_cam [data-testid="stCameraInput"]:has(img)::before {animation-duration: 1.1s;}
+
+/* Arco de escaneo luminoso que recorre la cara */
+.st-key-k_cam [data-testid="stCameraInput"]::after {content:""; position:absolute; z-index:7; pointer-events:none;
+  left: 50%; width: 72%; height: 70px; translate: -50% 0; top: 14%;
+  border-top: 2px solid rgba(255,255,255,.95); border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  -webkit-mask: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  filter: drop-shadow(0 -2px 6px rgba(255,255,255,.9)) drop-shadow(0 0 14px color-mix(in srgb, var(--anillo) 80%, transparent));
+  animation: fc-arco 2.6s ease-in-out infinite alternate;}
+@keyframes fc-arco {to {top: calc(100% - 82px - 26%);}}
+.st-key-k_cam [data-testid="stCameraInput"]:has(img)::after {animation-duration: .6s;}
+
+/* Botón blanco tipo píldora */
+.st-key-k_cam [data-testid="stCameraInput"] button {
+  background: #fff !important; border: 0 !important; border-radius: 999px !important; min-height: 62px;
+  margin-top: 16px; font-size: 0 !important; color: #1a0b1f !important;
+  box-shadow: 0 12px 30px -16px rgba(255,255,255,.35) !important; transition: transform .12s ease, box-shadow .12s ease;}
+.st-key-k_cam [data-testid="stCameraInput"] button:hover {transform: translateY(-1px);
+  box-shadow: 0 14px 34px -14px rgba(255,255,255,.5) !important;}
+.st-key-k_cam [data-testid="stCameraInput"] button:disabled {background: rgba(255,255,255,.18) !important;}
+.st-key-k_cam [data-testid="stCameraInput"] button * {display:none;}
+.st-key-k_cam [data-testid="stCameraInput"] button::after {content: "Escanear mi cara"; font-size: 1.25rem;
+  font-weight: 800; letter-spacing: .01em; color: #1a0b1f;}
+.st-key-k_cam [data-testid="stCameraInput"]:has(img) button::after {content: "Escaneando…";}
+
+/* ---------- Laterales ---------- */
+.fc-mascota.centro {min-height: 260px; align-items: center;}
+.fc-k-datos {display:flex; flex-direction:column; gap: 12px; align-items: flex-start; margin-bottom: 14px;}
+.fc-k-dato {display:flex; flex-direction:column; gap: 2px; padding: 14px 18px; min-width: 200px; border-radius: 22px;
+  background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.08); backdrop-filter: blur(10px);}
+.fc-k-dato b {font-family: var(--fc-display); font-size: 2.6rem; line-height: 1; color: #fff;}
+.fc-k-dato b.fecha {font-size: 1.6rem; text-transform: capitalize;}
+.fc-k-dato span {color: rgba(255,255,255,.55); font-weight: 700; font-size: .9rem;}
+.fc-k-dato .vivo {display:inline-flex; align-items:center; gap:8px; color:#fff; font-weight:800; letter-spacing:.12em;
+  text-transform:uppercase; font-size:.8rem;}
+.fc-k-dato .vivo i {width:8px; height:8px; border-radius:50%; background: var(--fc-dorado);
+  box-shadow: 0 0 0 0 rgba(245,180,0,.7); animation: fc-pulso 1.8s infinite;}
+@keyframes fc-pulso {70% {box-shadow: 0 0 0 10px rgba(245,180,0,0);} 100% {box-shadow: 0 0 0 0 rgba(245,180,0,0);}}
+.st-key-kiosko [data-testid="stPopover"] button {background: rgba(255,255,255,.045) !important;
+  border:1px solid rgba(255,255,255,.1) !important; color: rgba(255,255,255,.75) !important; box-shadow:none !important;
+  border-radius: 999px !important;}
+
+.st-key-kiosko .fc-cargando .txt {color:#fff;}
+.st-key-kiosko [data-testid="stProgress"] p {color: rgba(255,255,255,.6) !important; font-weight:700; text-align:center;}
+.st-key-kiosko [data-testid="stProgress"] > div > div > div {background: rgba(255,255,255,.1) !important;}
+.st-key-kiosko [data-testid="stProgress"] > div > div > div > div {background: rgba(255,255,255,.85) !important;}
 </style>
 """
 
@@ -484,6 +493,14 @@ def mascota(estado: str, respaldo: str, centro: bool = False) -> str:
         if (MASCOTA_DIR / f"{estado}.{ext}").is_file():
             return f'<div class="{clase}"><img src="app/static/mascota/{estado}.{ext}" alt=""></div>'
     return f'<div class="{clase}">{respaldo}</div>'
+
+
+def cabecera_kiosko(titulo: str, subtitulo: str = "", etiqueta: str = "", color: str = "") -> str:
+    """Título grande centrado del kiosko (estilo Face ID), con etiqueta de estado opcional."""
+    chip = f'<div class="etiqueta">{esc(etiqueta)}</div>' if etiqueta else ""
+    sub = f"<p>{esc(subtitulo)}</p>" if subtitulo else ""
+    return (f'<div class="fc-k-cab" style="--tono:{color or DORADO}">{chip}'
+            f'<div class="titulo">{esc(titulo)}</div>{sub}</div>')
 
 
 def resultado_kiosko(estado: str, emoji: str, etiqueta: str, titulo: str, subtitulo: str, color: str) -> str:

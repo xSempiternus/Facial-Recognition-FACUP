@@ -1,6 +1,7 @@
 # Asistencia con Reconocimiento Facial — Liga de Fútbol Infantil (MVP)
 
-MVP local: FastAPI + DeepFace + SQLite + Streamlit.
+MVP local: FastAPI + DeepFace + SQLite. Kiosko de llegada en Next.js (`web/`); panel del staff en Streamlit
+(se migra a `web/` por etapas).
 
 ## Estructura
 
@@ -9,14 +10,15 @@ data/                    BD SQLite (asistencia.db) y config.json; se crean solos
 src/cv_engine.py         detección facial, embeddings, similitud del coseno, configuración
 src/db_manager.py        SQLite: tablas jugadores / asistencia, CRUD y migraciones
 api/main.py              API FastAPI
-ui/app.py                Frontend Streamlit (navegación)
+web/                     Kiosko de llegada: Next.js + Motion + MediaPipe (ver web/README.md)
+ui/app.py                Panel del staff en Streamlit (navegación)
 ui/core.py               cliente de la API, estilos y componentes compartidos
 ui/vistas/               páginas: kiosko, acceso, inscribir, jugadores, asistencia, evaluacion
 scripts/evaluar_modelos.py  benchmark de modelos/detectores con fotos propias
 eval/fotos/              fotos de prueba (una carpeta por persona)
 eval/resultados/         resultados de la evaluación
 .streamlit/config.toml   tema visual
-iniciar.bat              lanza API + UI en Windows (doble clic)
+iniciar.bat              lanza API + panel del staff + kiosko en Windows (doble clic)
 ```
 
 ## Instalación
@@ -34,31 +36,39 @@ pip install -r requirements.txt
 
 Los pesos de cada modelo se descargan la primera vez que se usan en `%USERPROFILE%\.deepface`.
 
+El kiosko web necesita **Node.js LTS**. `iniciar.bat` hace `npm install` la primera vez (con internet:
+descarga también el modelo de MediaPipe) y luego funciona sin conexión.
+
 ## Ejecución
 
-Doble clic en `iniciar.bat`, o en dos terminales (con el venv activado, desde la raíz):
+Doble clic en `iniciar.bat` (abre tres ventanas), o en terminales separadas (con el venv activado, desde la raíz):
 
 ```bash
 set PYTHONUTF8=1
 uvicorn api.main:app
 streamlit run ui/app.py
+cd web && npm install && npm run build && npm start
 ```
 
 **PIN del staff:** copia `config.local.example.bat` como `config.local.bat` y cambia `STAFF_PIN`.
 `iniciar.bat` lo carga solo y el archivo no se sube a git.
 
-- UI: http://localhost:8501
+- **Kiosko de llegada:** http://localhost:3000 (pantalla completa con F11)
+- **Panel del staff:** http://localhost:8501
 - API (documentación interactiva): http://127.0.0.1:8000/docs
 
 ## Uso
 
-**⚽ Llegada (kiosko)** — pantalla por defecto. El niño mira la pantalla y aprieta el botón:
-🎉 verde = registrado · 👍 azul = ya había marcado hoy · 🙈 naranja = no se ve la cara · 🤔 rojo = no reconocido.
-Vuelve sola a la cámara tras 4 segundos. Además saluda en voz alta («¡Hola, Mateo! ¡A jugar!») con la
-voz del navegador; se apaga en ⚙️. Para una voz latinoamericana, instálala en Windows:
-Configuración → Hora e idioma → Voz → Agregar voces → Español (México).
+**⚽ Kiosko de llegada (http://localhost:3000)** — sin botones: el niño se para frente a la pantalla y pone
+la cara en el círculo central de la cancha. El kiosko lo guía («Acércate un poco», «Al centro de la cancha»),
+llena el anillo mientras se queda quieto y saca la foto solo. Registrado: el círculo se expande en verde con
+su nombre. Ya registrado: lo mismo en verde oscuro. Error: tarjeta amarilla (vuelve a intentar) o roja
+(llama al staff). Saluda en voz alta con la voz del navegador (`?voz=0` la apaga; `?prueba=1` deja el
+resultado en pantalla hasta tocarla). Para una voz latinoamericana, instálala en Windows:
+Configuración → Hora e idioma → Voz → Agregar voces → Español (México). Detalles en `web/README.md`.
+La página «Llegada» de Streamlit sigue disponible mientras se completa la migración.
 
-**🔐 Staff** (PIN por defecto `1234`):
+**🔐 Staff** (http://localhost:8501; PIN en `config.local.bat`, por defecto `1234`):
 - **📝 Inscribir** — 3 pasos: datos → 3 fotos guiadas (frente, izquierda, derecha) → listo. Comprueba que
   las 3 fotos sean de la misma persona y avisa si el niño parece ya inscrito.
 - **👥 Jugadores** — búsqueda, filtro por categoría, cantidad de fotos, marcar asistencia a mano,

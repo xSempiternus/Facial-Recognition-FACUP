@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/* Identidad FA CUP Chile (facupchile.cl): verde de la marca y su degradado a lima, sobre una cancha de noche.
+   Las tarjetas del árbitro dan el lenguaje de estado: amarilla = vuelve a intentar, roja = llama al staff. */
+@theme {
+  --color-noche: #03140a;
+  --color-cesped: #0a2e18;
+  --color-cesped-claro: #124526;
+  --color-verde: #008d36;
+  --color-lima: #95c11f;
+  --color-cal: #eaf5e4;
+  --color-amarilla: #f5c518;
+  --color-roja: #e5484d;
+
+  --font-display: var(--font-pluto), "Arial Narrow", sans-serif;
+  --font-sans: var(--font-pluto), "Arial Narrow", sans-serif;
+
+  --ease-cancha: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--color-noche);
+  color: var(--color-cal);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Números del contador sin saltos de ancho */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-lima);
+  outline-offset: 3px;
+}

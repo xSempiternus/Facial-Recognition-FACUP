@@ -39,15 +39,25 @@ void main() {
 
 export type Seguimiento = { x: MotionValue<number>; y: MotionValue<number>; presente: MotionValue<number> };
 
-type Props = { src: string; profundidad: string; seguimiento?: Seguimiento; fuerza?: number; className?: string };
+type Props = {
+  src: string;
+  profundidad: string;
+  seguimiento?: Seguimiento;
+  fuerza?: number;
+  /** Fracción de la resolución de pantalla a la que se dibuja. Bajo un desenfoque basta con poca: ahorra GPU. */
+  resolucion?: number;
+  className?: string;
+};
 
-export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, className }: Props) {
+export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, resolucion = 1, className }: Props) {
   const contenedor = useRef<HTMLDivElement>(null);
   const [sinWebGL, setSinWebGL] = useState(false);
   const seg = useRef(seguimiento);
+  const res = useRef(resolucion);
   useEffect(() => {
     seg.current = seguimiento;
-  }, [seguimiento]);
+    res.current = resolucion;
+  }, [seguimiento, resolucion]);
 
   useEffect(() => {
     // Sin WebGL se muestra la foto quieta (se avisa fuera del cuerpo del efecto).
@@ -132,7 +142,7 @@ export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, 
         const cuadro = () => {
           if (!vivo) return;
           raf = requestAnimationFrame(cuadro);
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const dpr = Math.min(window.devicePixelRatio || 1, 2) * res.current;
           const w = Math.round(c.clientWidth * dpr);
           const h = Math.round(c.clientHeight * dpr);
           if (c.width !== w || c.height !== h) {

@@ -1,6 +1,6 @@
 "use client";
 
-// Anillo del escáner (estilo Face ID): marcas finas alrededor del círculo de la cámara. Se encienden en verde
+// Anillo del escáner (estilo Face ID): marcas finas grabadas en el bisel de cristal del lente. Se encienden en verde
 // a medida que el niño se queda quieto; al reconocerlo se completan y se dibuja un check. El color es el único
 // mensaje: verde = bien, ámbar = vuelve a intentar, rojo = avisa al staff.
 
@@ -10,8 +10,6 @@ import type { Objetivo } from "./useRastreoCara";
 export type EstadoEscaner = "espera" | "ajustando" | "quieto" | "verificando" | "exito" | "aviso" | "error";
 
 const MARCAS = 90;
-const LARGO = 14; // largo radial de cada marca
-const ANCHO = 2.2; // grosor de cada marca
 
 const COLOR_LLENO: Partial<Record<EstadoEscaner, string>> = {
   exito: "#1fb35a",
@@ -19,9 +17,13 @@ const COLOR_LLENO: Partial<Record<EstadoEscaner, string>> = {
   error: "#f0524d",
 };
 
-export default function Escaner({ objetivo, progreso, estado }: { objetivo: Objetivo; progreso: MotionValue<number>; estado: EstadoEscaner }) {
+type Props = { objetivo: Objetivo; banda: number; progreso: MotionValue<number>; estado: EstadoEscaner };
+
+export default function Escaner({ objetivo, banda, progreso, estado }: Props) {
   const { cx, cy, r } = objetivo;
-  const R = r + 24; // radio del anillo de marcas
+  const R = r + banda / 2; // las marcas van al centro del bisel
+  const LARGO = banda * 0.36; // largo radial de cada marca
+  const ANCHO = Math.max(1.6, r * 0.011); // grosor de cada marca
   const paso = (2 * Math.PI * R) / MARCAS;
   const marcas = { strokeDasharray: `${ANCHO} ${paso - ANCHO}`, strokeWidth: LARGO, fill: "none" } as const;
   const lleno = COLOR_LLENO[estado];
@@ -45,8 +47,8 @@ export default function Escaner({ objetivo, progreso, estado }: { objetivo: Obje
         </mask>
       </defs>
 
-      {/* Borde fino del círculo de la cámara */}
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.10)" strokeWidth={1} />
+      {/* Canto interior del bisel: una línea de luz donde el cristal toca la cámara */}
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth={1} />
 
       {/* Marcas base */}
       <motion.circle cx={cx} cy={cy} r={R} stroke={base} {...marcas} animate={{ stroke: base }} transition={{ duration: 0.4 }} />

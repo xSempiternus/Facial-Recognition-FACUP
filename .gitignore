@@ -7,7 +7,7 @@ eval/fotos/*
 eval/resultados/
 !eval/fotos/.gitkeep
 .venv_old/
-.claude/
+.claude/*
+!.claude/skills/
 config.local.bat
 eval/midas_small.onnx
-skills-lock.json

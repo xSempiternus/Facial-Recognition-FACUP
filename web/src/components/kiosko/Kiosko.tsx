@@ -1,16 +1,19 @@
 "use client";
 
-// Kiosko de llegada FA CUP Chile, dirección minimal (tipo Face ID): fondo negro, la cámara solo dentro de un
-// círculo, un anillo de marcas finas que se enciende en verde y texto limpio debajo. Sin botones: al quedarse
-// quieto frente al círculo, la foto se saca sola, la API reconoce al niño y su nombre aparece abajo.
+// Kiosko de llegada FA CUP Chile, "cristal sobre la cancha": detrás, fotos 3D de FA CUP siempre en movimiento;
+// delante, la cámara dentro de un lente con bisel de cristal y el texto en una hoja de cristal. Sin botones: al
+// quedarse quieto frente al lente, la foto se saca sola, la API reconoce al niño y su nombre aparece abajo.
+// Funciona en tablet y teléfono, en vertical u horizontal.
 
 import { AnimatePresence, motion, MotionConfig, useMotionValue } from "motion/react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hablar } from "@/lib/voz";
 import { llegadasDeHoy, verificar, type Verificacion } from "@/lib/api";
-import Escaner, { type EstadoEscaner } from "./Escaner";
+import type { EstadoEscaner } from "./Escaner";
+import FondoVivo from "./FondoVivo";
 import Inicio from "./Inicio";
+import Lente from "./Lente";
 import Mascota, { type EstadoMascota } from "./Mascota";
 import { useRastreoCara, type Objetivo, type Postura } from "./useRastreoCara";
 
@@ -36,10 +39,16 @@ const GUIA: Record<Postura, { titulo: string; sub: string }> = {
   quieto: { titulo: "Mantén la posición", sub: "Te estamos reconociendo" },
 };
 
-// Círculo de la cámara: centrado y un poco arriba, para dejar espacio al texto.
+// Círculo de la cámara: centrado y arriba, para dejar espacio a la hoja de texto. En vertical (teléfono, tablet
+// parada) usa el ancho; en horizontal, el alto.
 function calcularObjetivo(ancho: number, alto: number): Objetivo {
-  return { cx: ancho / 2, cy: alto * 0.42, r: Math.min(ancho, alto) * 0.25 };
+  const vertical = alto > ancho;
+  const r = vertical ? Math.min(ancho * 0.34, alto * 0.21) : alto * 0.23;
+  return { cx: ancho / 2, cy: alto * (vertical ? 0.42 : 0.38), r };
 }
+
+// Ancho del bisel de cristal alrededor de la cámara.
+const anchoBisel = (r: number) => Math.min(52, Math.max(28, r * 0.2));
 
 // Tamaño de la ventana como estado externo (se actualiza al redimensionar).
 const suscribirResize = (avisar: () => void) => {
@@ -225,7 +234,9 @@ export default function Kiosko() {
       : { titulo: "Bienvenido", sub: "Acércate a la pantalla para registrar tu llegada" };
 
   const { cx, cy, r } = circulo;
+  const banda = anchoBisel(r);
   const resultadoVisible = fase === "resultado";
+  const exito = resultadoVisible && resultado?.tono === "exito";
 
   return (
     <MotionConfig reducedMotion="user">
@@ -233,25 +244,36 @@ export default function Kiosko() {
         className="relative h-dvh w-screen overflow-hidden bg-fondo"
         onClick={() => resultadoVisible && prueba.current && terminarResultado()}
       >
-        {/* Cámara: solo dentro del círculo, en espejo. Se oscurece al mostrar un resultado. */}
-        <motion.video
-          ref={video}
-          muted
-          playsInline
-          className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
-          style={{
-            WebkitMaskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
-            maskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
-          }}
-          animate={{ filter: resultadoVisible ? "brightness(0.32) saturate(0.6) blur(6px)" : "brightness(1) saturate(0.95) blur(0px)" }}
-          transition={{ duration: 0.5, ease: EASE }}
-        />
+        {/* Fondo vivo: fotos 3D de FA CUP, nítidas en el inicio y desenfocadas tras el cristal al escanear */}
+        <FondoVivo seguimiento={seguimiento} modo={mostrarInicio ? "inicio" : resultadoVisible ? "resultado" : "escaneo"} />
 
-        <Escaner objetivo={circulo} progreso={progreso} estado={estado} />
+        {/* Lente: cámara + bisel de cristal + marcas. Al salir del inicio se acerca desde atrás. */}
+        <motion.div
+          className="absolute inset-0"
+          style={{ transformOrigin: `${cx}px ${cy}px` }}
+          initial={false}
+          animate={mostrarInicio ? { opacity: 0, scale: 0.86 } : { opacity: 1, scale: 1 }}
+          transition={mostrarInicio ? { duration: 0.5, ease: EASE } : { type: "spring", stiffness: 140, damping: 22 }}
+        >
+          {/* Cámara: solo dentro del círculo, en espejo. Se oscurece al mostrar un resultado. */}
+          <motion.video
+            ref={video}
+            muted
+            playsInline
+            className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
+            style={{
+              WebkitMaskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
+              maskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
+            }}
+            animate={{ filter: resultadoVisible ? "brightness(0.32) saturate(0.6) blur(6px)" : "brightness(1) saturate(0.95) blur(0px)" }}
+            transition={{ duration: 0.5, ease: EASE }}
+          />
+          <Lente objetivo={circulo} banda={banda} progreso={progreso} estado={estado} />
+        </motion.div>
 
-        {/* Inicio: fotos 3D de FA CUP mientras no hay nadie cerca */}
+        {/* Inicio: saludo sobre el fondo vivo mientras no hay nadie cerca */}
         <AnimatePresence>
-          {mostrarInicio && <Inicio key="inicio" seguimiento={seguimiento} titulo={textoInicio.titulo} sub={textoInicio.sub} />}
+          {mostrarInicio && <Inicio key="inicio" titulo={textoInicio.titulo} sub={textoInicio.sub} />}
         </AnimatePresence>
 
         {/* Barra superior: logo y llegadas del día, discretos */}
@@ -273,42 +295,56 @@ export default function Kiosko() {
           )}
         </header>
 
-        {/* Texto bajo el círculo */}
-        {!mostrarInicio && (
-          <div
-            className="absolute inset-x-0 z-20 flex flex-col items-center px-6 text-center"
-            style={{ top: cy + r + 56 }}
-          >
-            <AnimatePresence mode="wait">
+        {/* Hoja de cristal bajo el lente: guía, y al reconocer, el nombre en grande */}
+        <AnimatePresence>
+          {!mostrarInicio && (
+            <motion.div
+              key="hoja"
+              className="absolute inset-x-0 z-20 flex justify-center px-4"
+              style={{ top: cy + r + banda + Math.max(20, alto * 0.035) }}
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 16, transition: { duration: 0.3 } }}
+              transition={{ type: "spring", stiffness: 160, damping: 24 }}
+            >
               <motion.div
-                key={texto.titulo + texto.sub}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.3, ease: EASE }}
+                layout
+                className="cristal w-full max-w-[600px] overflow-hidden rounded-[32px] px-7 py-5 text-center sm:px-10 sm:py-6"
+                style={{ borderColor: exito ? "rgba(31,179,90,.45)" : undefined }}
+                transition={{ layout: { type: "spring", stiffness: 260, damping: 30 } }}
               >
-                <h1
-                  className={`font-semibold tracking-[-0.02em] text-texto ${
-                    texto.grande ? "text-[clamp(3rem,5.4vw,4.8rem)] leading-none" : "text-[clamp(1.9rem,3vw,2.6rem)] leading-tight"
-                  }`}
-                >
-                  {texto.titulo}
-                </h1>
-                <p className="mt-2.5 text-[clamp(1.05rem,1.5vw,1.35rem)] text-texto-2">
-                  {texto.detalle && <span className="text-texto-3">{texto.detalle}&nbsp;&nbsp;</span>}
-                  {texto.sub}
-                </p>
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.div
+                    key={texto.titulo + texto.sub}
+                    initial={{ opacity: 0, y: 8, filter: "blur(4px)" }}
+                    animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                    exit={{ opacity: 0, y: -6, filter: "blur(4px)" }}
+                    transition={{ duration: 0.28, ease: EASE }}
+                  >
+                    <h1
+                      className={`font-semibold tracking-[-0.025em] text-texto ${
+                        texto.grande ? "text-[clamp(2.6rem,7vw,4.4rem)] leading-[1.02]" : "text-[clamp(1.55rem,3.6vw,2.3rem)] leading-tight"
+                      }`}
+                    >
+                      {texto.titulo}
+                    </h1>
+                    <p className="mt-2 text-[clamp(1rem,2vw,1.25rem)] leading-snug text-texto-2">
+                      {texto.detalle && <span className="font-medium text-verde-pantalla">{texto.detalle}&nbsp;&nbsp;</span>}
+                      {texto.sub}
+                    </p>
+                  </motion.div>
+                </AnimatePresence>
               </motion.div>
-            </AnimatePresence>
-          </div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Mascota (aparece cuando existan sus imágenes en public/mascota/) */}
         {!mostrarInicio && (
           <div className="absolute bottom-[5vh] left-[4vw] z-20">
             <Mascota
               estado={resultado?.mascota ?? (fase === "enviando" ? "buscando" : "bienvenida")}
-              tamaño={Math.round(alto * 0.24)}
+              tamaño={Math.round(Math.min(alto * 0.22, ancho * 0.3))}
             />
           </div>
         )}

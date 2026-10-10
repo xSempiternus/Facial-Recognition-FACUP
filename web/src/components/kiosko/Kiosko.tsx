@@ -31,6 +31,10 @@ type Resultado = {
   mascota: EstadoMascota;
 };
 
+// Saludos de jugador: uno por llegada, para que no suene siempre igual.
+const ANIMOS = ["¡A la cancha!", "¡Hoy se juega!", "¡A jugar!", "¡Con todo hoy!", "¡Vamos equipo!"];
+const animo = () => ANIMOS[Math.floor(Math.random() * ANIMOS.length)];
+
 const GUIA: Record<Postura, { titulo: string; sub: string }> = {
   "sin-cara": { titulo: "Mira a la cámara", sub: "Tu llegada se registra sola" },
   lejos: { titulo: "Acércate un poco", sub: "Tu cara debe llenar el círculo" },
@@ -78,7 +82,7 @@ function aResultado(v: Verificacion): { resultado: Resultado; frase: string | nu
     }
     const ahora = new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
     return {
-      resultado: { tono: "exito", titulo: nombre, grande: true, detalle: v.categoria, sub: `Llegada registrada a las ${ahora}`, mascota: "celebra" },
+      resultado: { tono: "exito", titulo: nombre, grande: true, detalle: v.categoria, sub: `${animo()} Llegada a las ${ahora}`, mascota: "celebra" },
       frase: `¡Hola, ${nombre}! ¡A jugar!`,
     };
   }
@@ -233,10 +237,11 @@ export default function Kiosko() {
       ? { titulo: "Acércate a la pantalla", sub: "Tu llegada se registra sola" }
       : { titulo: "Bienvenido", sub: "Acércate a la pantalla para registrar tu llegada" };
 
-  const { cx, cy, r } = circulo;
-  const banda = anchoBisel(r);
   const resultadoVisible = fase === "resultado";
   const exito = resultadoVisible && resultado?.tono === "exito";
+
+  const { cx, cy, r } = circulo;
+  const banda = anchoBisel(r);
 
   return (
     <MotionConfig reducedMotion="user">
@@ -245,7 +250,7 @@ export default function Kiosko() {
         onClick={() => resultadoVisible && prueba.current && terminarResultado()}
       >
         {/* Fondo vivo: fotos 3D de FA CUP, nítidas en el inicio y desenfocadas tras el cristal al escanear */}
-        <FondoVivo seguimiento={seguimiento} modo={mostrarInicio ? "inicio" : resultadoVisible ? "resultado" : "escaneo"} />
+        <FondoVivo seguimiento={seguimiento} modo={mostrarInicio ? "inicio" : exito ? "exito" : resultadoVisible ? "resultado" : "escaneo"} />
 
         {/* Lente: cámara + bisel de cristal + marcas. Al salir del inicio se acerca desde atrás. */}
         <motion.div
@@ -265,7 +270,13 @@ export default function Kiosko() {
               WebkitMaskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
               maskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
             }}
-            animate={{ filter: resultadoVisible ? "brightness(0.32) saturate(0.6) blur(6px)" : "brightness(1) saturate(0.95) blur(0px)" }}
+            animate={{
+              filter: exito
+                ? "brightness(0.9) saturate(1) blur(0px)"
+                : resultadoVisible
+                  ? "brightness(0.32) saturate(0.6) blur(6px)"
+                  : "brightness(1) saturate(0.95) blur(0px)",
+            }}
             transition={{ duration: 0.5, ease: EASE }}
           />
           <Lente objetivo={circulo} banda={banda} progreso={progreso} estado={estado} />
@@ -278,12 +289,12 @@ export default function Kiosko() {
 
         {/* Barra superior: logo y llegadas del día, discretos */}
         <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-[4vw] pt-[4vh]">
-          <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(26px,3.6vh,36px)] w-auto opacity-90" />
+          <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(32px,4.6vh,46px)] w-auto" />
           {hoy !== null && (
-            <p className="text-[clamp(0.95rem,1.25vw,1.15rem)] text-texto-2">
+            <p className="flex items-baseline gap-2 text-[clamp(0.9rem,1.3vw,1.1rem)] text-texto/80">
               <motion.span
                 key={hoy}
-                className="tabular mr-1.5 font-medium text-texto"
+                className="tabular text-[clamp(1.6rem,3vw,2.4rem)] font-semibold leading-none tracking-[-0.03em] text-verde-pantalla"
                 initial={{ opacity: 0, y: -6 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.4, ease: EASE }}
@@ -309,8 +320,11 @@ export default function Kiosko() {
             >
               <motion.div
                 layout
-                className="cristal w-full max-w-[600px] overflow-hidden rounded-[32px] px-7 py-5 text-center sm:px-10 sm:py-6"
-                style={{ borderColor: exito ? "rgba(31,179,90,.45)" : undefined }}
+                className="cristal w-full max-w-[640px] overflow-hidden rounded-[22px] px-7 py-5 text-center sm:px-10 sm:py-6"
+                style={{
+                  borderColor: exito ? "rgba(31,179,90,.55)" : undefined,
+                  boxShadow: exito ? "inset 0 1px 0 rgb(255 255 255 / .28), 0 0 80px rgba(31,179,90,.28), 0 24px 70px rgb(0 0 0 / .4)" : undefined,
+                }}
                 transition={{ layout: { type: "spring", stiffness: 260, damping: 30 } }}
               >
                 <AnimatePresence mode="wait" initial={false}>
@@ -323,7 +337,7 @@ export default function Kiosko() {
                   >
                     <h1
                       className={`font-semibold tracking-[-0.025em] text-texto ${
-                        texto.grande ? "text-[clamp(2.6rem,7vw,4.4rem)] leading-[1.02]" : "text-[clamp(1.55rem,3.6vw,2.3rem)] leading-tight"
+                        texto.grande ? "text-[clamp(3rem,10vw,5.6rem)] font-bold leading-[0.98] tracking-[-0.04em]" : "text-[clamp(1.55rem,3.6vw,2.3rem)] leading-tight"
                       }`}
                     >
                       {texto.titulo}

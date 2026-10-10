@@ -43,6 +43,25 @@ const GUIA: Record<Postura, { titulo: string; sub: string }> = {
   quieto: { titulo: "Mantén la posición", sub: "Te estamos reconociendo" },
 };
 
+function mensajeErrorCamara(e: unknown) {
+  if (e instanceof DOMException) {
+    switch (e.name) {
+      case "NotAllowedError":
+      case "SecurityError":
+        return "Permite el acceso a la cámara en el navegador y toca la pantalla para reintentar.";
+      case "NotFoundError":
+      case "DevicesNotFoundError":
+        return "No encontramos una cámara disponible en este equipo.";
+      case "NotReadableError":
+      case "TrackStartError":
+        return "No pudimos abrir la cámara. Cierra otras apps que la estén usando y vuelve a intentar.";
+      default:
+        return "No se pudo iniciar la cámara. Toca la pantalla para reintentar.";
+    }
+  }
+  return e instanceof Error ? e.message : "No se pudo iniciar la cámara. Toca la pantalla para reintentar.";
+}
+
 // Círculo de la cámara: centrado y arriba, para dejar espacio a la hoja de texto. En vertical (teléfono, tablet
 // parada) usa el ancho; en horizontal, el alto.
 function calcularObjetivo(ancho: number, alto: number): Objetivo {
@@ -112,6 +131,7 @@ export default function Kiosko() {
   }, [circulo]);
 
   const [errorCamara, setErrorCamara] = useState<string | null>(null);
+  const [intentoCamara, setIntentoCamara] = useState(0);
   const [fase, setFase] = useState<"escaneando" | "enviando" | "resultado">("escaneando");
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [hoy, setHoy] = useState<number | null>(null);
@@ -131,25 +151,41 @@ export default function Kiosko() {
     let stream: MediaStream | null = null;
     let cancelado = false;
     (async () => {
-      if (!navigator.mediaDevices) throw new Error("Este navegador no tiene acceso a la cámara.");
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Este navegador no tiene acceso a la cámara.");
       const s = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
       if (cancelado) return s.getTracks().forEach((t) => t.stop());
       stream = s;
+      setErrorCamara(null);
       if (video.current) {
         video.current.srcObject = s;
         video.current.play().catch(() => {});
       }
-    })().catch((e) =>
-      setErrorCamara(e instanceof DOMException ? "Permite el acceso a la cámara para registrar llegadas." : String(e.message ?? e)),
-    );
+    })().catch((e) => setErrorCamara(mensajeErrorCamara(e)));
     return () => {
       cancelado = true;
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, []);
+  }, [intentoCamara]);
+
+  useEffect(() => {
+    if (!errorCamara) return;
+    let reintentado = false;
+    const reintentar = () => {
+      if (reintentado) return;
+      reintentado = true;
+      setErrorCamara(null);
+      setIntentoCamara((n) => n + 1);
+    };
+    window.addEventListener("pointerdown", reintentar, { once: true });
+    window.addEventListener("keydown", reintentar, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", reintentar);
+      window.removeEventListener("keydown", reintentar);
+    };
+  }, [errorCamara]);
 
   // Contador de llegadas de hoy.
   useEffect(() => {

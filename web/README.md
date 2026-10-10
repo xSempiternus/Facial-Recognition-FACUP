@@ -5,6 +5,10 @@ Reemplaza al kiosko de Streamlit; el panel del staff sigue en Streamlit por ahor
 
 ## Cómo funciona
 
+- **Inicio** (sin nadie cerca): fotos de facupchile.cl en 3D. Un mapa de profundidad (MiDaS) mueve cada píxel
+  según qué tan cerca está; la foto se mueve sola, lento, y si alguien pasa sigue su cabeza como una ventana.
+  Al acercarse, la foto se cierra hacia el círculo central y aparece la cámara. Para sumar fotos:
+  `python scripts/foto_inicio.py foto.jpg nombre` (desde la raíz) y agrégala a `FOTOS` en `Inicio.tsx`.
 - La cámara ocupa la pantalla y encima van las líneas de la cancha. El **círculo central** es donde va la cara.
 - **MediaPipe Face Landmarker** sigue la cara en el navegador (el video no sale del equipo): dibuja la malla,
   guía al niño («Acércate un poco», «Al centro de la cancha») y llena el anillo mientras se queda quieto.
@@ -31,6 +35,7 @@ Parámetros de la URL:
 ## Archivos
 
 ```
+src/components/kiosko/Inicio.tsx         pantalla de inicio con fotos 3D (Foto3D.tsx: shader WebGL)
 src/components/kiosko/Kiosko.tsx         pantalla y estados (escaneando → enviando → resultado)
 src/components/kiosko/useRastreoCara.ts  MediaPipe: malla, postura, anillo y captura automática
 src/components/kiosko/Cancha.tsx         líneas de cal y anillo del círculo central (SVG + Motion)

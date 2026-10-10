@@ -10,12 +10,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { hablar } from "@/lib/voz";
 import { llegadasDeHoy, verificar, type Verificacion } from "@/lib/api";
 import Cancha from "./Cancha";
+import Inicio from "./Inicio";
 import Mascota from "./Mascota";
 import Resultado, { type Llegada } from "./Resultado";
 import { useRastreoCara, type Objetivo, type Postura } from "./useRastreoCara";
 
 const MOSTRAR_RESULTADO_MS = 4200;
 const ESPERA_MISMO_NIÑO_MS = 6000; // tras un resultado, no vuelve a escanear a quien sigue frente a la cámara
+const INICIO_TRAS_MS = 1500; // sin nadie cerca este tiempo → pantalla de inicio
 
 const GUIA: Record<Postura, { titulo: string; sub: string }> = {
   "sin-cara": { titulo: "Entra a la cancha", sub: "Ponte frente a la pantalla para marcar tu llegada" },
@@ -141,6 +143,12 @@ export default function Kiosko() {
     if (frase && voz.current) hablar(frase);
   }, []);
 
+  // Dónde está la cara de quien mira (la foto 3D de inicio la sigue).
+  const caraX = useMotionValue(0);
+  const caraY = useMotionValue(0);
+  const caraPresente = useMotionValue(0);
+  const seguimiento = useMemo(() => ({ x: caraX, y: caraY, presente: caraPresente }), [caraX, caraY, caraPresente]);
+
   const { listo, error: errorModelo, postura } = useRastreoCara({
     video,
     lienzo,
@@ -148,7 +156,16 @@ export default function Kiosko() {
     progreso,
     activo: fase === "escaneando" && !esperarSalida,
     onCaptura: alCapturar,
+    seguimiento,
   });
+
+  // Pantalla de inicio: cuando no hay nadie cerca por un momento (sin parpadeos si alguien pasa rápido).
+  const lejos = postura === "sin-cara" || postura === "lejos";
+  const [inicioArmado, setInicioArmado] = useState(true);
+  useEffect(() => {
+    const id = setTimeout(() => setInicioArmado(lejos), lejos ? INICIO_TRAS_MS : 0);
+    return () => clearTimeout(id);
+  }, [lejos]);
 
   // Fin del resultado: vuelve a la cancha, pero espera a que el niño se vaya (o pasen unos segundos).
   const terminarResultado = useCallback(() => {
@@ -178,6 +195,14 @@ export default function Kiosko() {
             ? { titulo: "¡Listo!", sub: "Deja pasar al siguiente" }
             : GUIA[postura];
 
+  const sinCamara = Boolean(errorCamara || errorModelo);
+  const mostrarInicio = !sinCamara && fase === "escaneando" && !esperarSalida && (!listo || (lejos && inicioArmado));
+  const textoInicio = !listo
+    ? { titulo: "Preparando la cancha", sub: "Un segundo…" }
+    : postura !== "sin-cara" // hay alguien: se mantiene mientras la foto se abre hacia la cámara
+      ? { titulo: "Acércate un poco más", sub: "Tu llegada se marca sola al ponerte frente a la pantalla" }
+      : { titulo: "Entra a la cancha", sub: "Ponte frente a la pantalla: tu llegada se marca sola" };
+
   return (
     <MotionConfig reducedMotion="user">
       <main className="relative h-dvh w-screen overflow-hidden bg-noche">
@@ -205,6 +230,13 @@ export default function Kiosko() {
 
         <canvas ref={lienzo} className="pointer-events-none absolute inset-0 h-full w-full" />
         <Cancha ancho={ancho} alto={alto} objetivo={circulo} progreso={progreso} postura={postura} />
+
+        {/* Inicio: fotos 3D de FA CUP mientras no hay nadie cerca */}
+        <AnimatePresence>
+          {mostrarInicio && (
+            <Inicio key="inicio" objetivo={circulo} seguimiento={seguimiento} titulo={textoInicio.titulo} sub={textoInicio.sub} />
+          )}
+        </AnimatePresence>
 
         {/* Marcador superior */}
         <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-[5vw] pt-[3.2vh]">
@@ -242,7 +274,7 @@ export default function Kiosko() {
         {/* Guía: cambia con un fundido desenfocado, sin saltos */}
         <div className="absolute inset-x-0 bottom-[6vh] z-20 flex flex-col items-center px-6 text-center">
           <AnimatePresence mode="wait">
-            <motion.div
+            {!mostrarInicio && <motion.div
               key={guia.titulo}
               initial={{ opacity: 0, y: 18, filter: "blur(10px)" }}
               animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
@@ -253,7 +285,7 @@ export default function Kiosko() {
                 {guia.titulo}
               </h1>
               <p className="mt-3 text-[clamp(1.1rem,1.8vw,1.6rem)] text-cal/70">{guia.sub}</p>
-            </motion.div>
+            </motion.div>}
           </AnimatePresence>
         </div>
 

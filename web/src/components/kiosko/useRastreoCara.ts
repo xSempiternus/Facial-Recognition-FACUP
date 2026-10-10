@@ -6,6 +6,7 @@
 
 import { FaceLandmarker, FilesetResolver, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import type { MotionValue } from "motion/react";
+import type { Seguimiento } from "./Foto3D";
 import { useEffect, useRef, useState, type RefObject } from "react";
 
 export type Postura = "sin-cara" | "lejos" | "cerca" | "descentrado" | "quieto";
@@ -24,9 +25,11 @@ type Opciones = {
   progreso: MotionValue<number>;
   activo: boolean;
   onCaptura: (foto: Blob) => void;
+  /** Posición de la cara en pantalla (-1..1 desde el centro) para efectos que la siguen, como la foto 3D. */
+  seguimiento?: Seguimiento;
 };
 
-export function useRastreoCara({ video, lienzo, objetivo, progreso, activo, onCaptura }: Opciones) {
+export function useRastreoCara({ video, lienzo, objetivo, progreso, activo, onCaptura, seguimiento }: Opciones) {
   const [listo, setListo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [postura, setPostura] = useState<Postura>("sin-cara");
@@ -141,10 +144,14 @@ export function useRastreoCara({ video, lienzo, objetivo, progreso, activo, onCa
         const movimiento = centroPrevio ? Math.hypot(centro.x - centroPrevio.x, centro.y - centroPrevio.y) : 0;
         estable = movimiento < r * 0.045;
         centroPrevio = centro;
+        seguimiento?.x.set((centro.x / W - 0.5) * 2);
+        seguimiento?.y.set((centro.y / H - 0.5) * 2);
+        seguimiento?.presente.set(1);
 
         dibujarMalla(ctx, pts, nueva === "quieto");
       } else {
         centroPrevio = null;
+        seguimiento?.presente.set(0);
       }
 
       if (nueva !== posturaActual) {
@@ -172,7 +179,7 @@ export function useRastreoCara({ video, lienzo, objetivo, progreso, activo, onCa
     };
     raf = requestAnimationFrame(cuadro);
     return () => cancelAnimationFrame(raf);
-  }, [listo, video, lienzo, objetivo, progreso]);
+  }, [listo, video, lienzo, objetivo, progreso, seguimiento]);
 
   return { listo, error, postura };
 }

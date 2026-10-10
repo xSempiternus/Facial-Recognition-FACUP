@@ -131,7 +131,7 @@ export default function Kiosko() {
   }, [circulo]);
 
   const [errorCamara, setErrorCamara] = useState<string | null>(null);
-  const [intentoCamara, setIntentoCamara] = useState(0);
+  const [intento, setIntento] = useState(0);
   const [fase, setFase] = useState<"escaneando" | "enviando" | "resultado">("escaneando");
   const [resultado, setResultado] = useState<Resultado | null>(null);
   const [hoy, setHoy] = useState<number | null>(null);
@@ -168,7 +168,7 @@ export default function Kiosko() {
       cancelado = true;
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [intentoCamara]);
+  }, [intento]);
 
   useEffect(() => {
     if (!errorCamara) return;
@@ -177,7 +177,7 @@ export default function Kiosko() {
       if (reintentado) return;
       reintentado = true;
       setErrorCamara(null);
-      setIntentoCamara((n) => n + 1);
+      setIntento((n) => n + 1);
     };
     window.addEventListener("pointerdown", reintentar, { once: true });
     window.addEventListener("keydown", reintentar, { once: true });
@@ -216,9 +216,26 @@ export default function Kiosko() {
     objetivo,
     progreso,
     activo: fase === "escaneando" && !esperarSalida,
+    intento,
     onCaptura: alCapturar,
     seguimiento,
   });
+
+  useEffect(() => {
+    if (!errorModelo || errorCamara) return;
+    let reintentado = false;
+    const reintentar = () => {
+      if (reintentado) return;
+      reintentado = true;
+      setIntento((n) => n + 1);
+    };
+    window.addEventListener("pointerdown", reintentar, { once: true });
+    window.addEventListener("keydown", reintentar, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", reintentar);
+      window.removeEventListener("keydown", reintentar);
+    };
+  }, [errorCamara, errorModelo]);
 
   // Fin del resultado: vuelve a escanear, pero espera a que el niño se vaya (o pasen unos segundos).
   const terminarResultado = useCallback(() => {
@@ -252,7 +269,10 @@ export default function Kiosko() {
   let texto: { titulo: string; sub: string; detalle?: string | null; grande?: boolean };
   let estado: EstadoEscaner;
   if (sinCamara) {
-    texto = { titulo: "Cámara no disponible", sub: errorCamara ?? "No se pudo iniciar el reconocimiento. Avisa al staff." };
+    texto = {
+      titulo: errorCamara ? "Cámara no disponible" : "Reconocimiento no disponible",
+      sub: errorCamara ?? errorModelo ?? "No se pudo iniciar el reconocimiento. Avisa al staff.",
+    };
     estado = "error";
   } else if (fase === "resultado" && resultado) {
     texto = resultado;
@@ -299,6 +319,7 @@ export default function Kiosko() {
           {/* Cámara: solo dentro del círculo, en espejo. Se oscurece al mostrar un resultado. */}
           <motion.video
             ref={video}
+            autoPlay
             muted
             playsInline
             className="absolute inset-0 h-full w-full -scale-x-100 object-cover"

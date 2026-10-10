@@ -150,7 +150,6 @@ export default function Kiosko() {
   useEffect(() => {
     let stream: MediaStream | null = null;
     let cancelado = false;
-    setErrorCamara(null);
     (async () => {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Este navegador no tiene acceso a la cámara.");
       const s = await navigator.mediaDevices.getUserMedia({
@@ -159,6 +158,7 @@ export default function Kiosko() {
       });
       if (cancelado) return s.getTracks().forEach((t) => t.stop());
       stream = s;
+      setErrorCamara(null);
       if (video.current) {
         video.current.srcObject = s;
         video.current.play().catch(() => {});
@@ -176,6 +176,7 @@ export default function Kiosko() {
     const reintentar = () => {
       if (reintentado) return;
       reintentado = true;
+      setErrorCamara(null);
       setIntentoCamara((n) => n + 1);
     };
     window.addEventListener("pointerdown", reintentar, { once: true });

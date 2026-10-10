@@ -10,3 +10,4 @@ eval/resultados/
 .claude/
 config.local.bat
 eval/midas_small.onnx
+skills-lock.json

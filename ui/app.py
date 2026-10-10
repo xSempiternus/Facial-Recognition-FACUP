@@ -1,10 +1,10 @@
-"""Frontend Streamlit: kiosko de llegada para niños y panel del staff."""
+"""Panel del staff (Streamlit). El kiosko de llegada de los niños es la app web en web/ (http://localhost:3000)."""
 
 import streamlit as st
 
 import core
 
-st.set_page_config(page_title="Asistencia · FA CUP Chile", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Staff · FA CUP Chile", page_icon="⚽", layout="wide")
 core.init_state()
 core.inject_css()
 st.logo(str(core.STATIC_DIR / "logo-blanco.png"), size="large")
@@ -14,8 +14,7 @@ staff_ok = st.session_state.staff_ok
 # muestran el PIN (core.requerir_staff) en vez de "Page not found".
 vis = "visible" if staff_ok else "hidden"
 
-llegada = st.Page("vistas/kiosko.py", title="Llegada", icon=":material/sports_soccer:", url_path="llegada", default=True)
-acceso = st.Page("vistas/acceso.py", title="Staff", icon=":material/lock:", url_path="staff",
+acceso = st.Page("vistas/acceso.py", title="Ingresar", icon=":material/lock:", url_path="staff", default=True,
                  visibility="hidden" if staff_ok else "visible")
 inscribir = st.Page("vistas/inscribir.py", title="Inscribir", icon=":material/person_add:", url_path="inscribir", visibility=vis)
 staff = [
@@ -28,8 +27,8 @@ staff = [
     st.Page("vistas/estilo.py", title="Guía de estilo", icon=":material/palette:", url_path="estilo", visibility=vis),
 ]
 
-pagina = st.navigation({"": [llegada, acceso], "Staff": staff}, position="top")
-# Recién ingresado desde la página de acceso: ir directo al panel en vez de volver al kiosko.
-if st.session_state.pop("ir_a_staff", False):
+pagina = st.navigation({"": [acceso], "Staff": staff}, position="top")
+# Con sesión iniciada, la página de ingreso lleva directo al panel.
+if st.session_state.pop("ir_a_staff", False) or (staff_ok and pagina is acceso):
     st.switch_page(inscribir)
 pagina.run()

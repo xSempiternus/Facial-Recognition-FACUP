@@ -20,12 +20,17 @@ type Opciones = {
   objetivo: RefObject<Objetivo>;
   progreso: MotionValue<number>;
   activo: boolean;
+  intento: number;
   onCaptura: (foto: Blob) => void;
   /** Posición de la cara en pantalla (-1..1 desde el centro) para efectos que la siguen, como la foto 3D. */
   seguimiento?: Seguimiento;
 };
 
-export function useRastreoCara({ video, objetivo, progreso, activo, onCaptura, seguimiento }: Opciones) {
+const URL_MODELO_REMOTO =
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const RUTAS_MODELO = ["/models/face_landmarker.task", "/modelos/face-landmarker.task", URL_MODELO_REMOTO];
+
+export function useRastreoCara({ video, objetivo, progreso, activo, intento, onCaptura, seguimiento }: Opciones) {
   const [listo, setListo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [postura, setPostura] = useState<Postura>("sin-cara");
@@ -44,21 +49,33 @@ export function useRastreoCara({ video, objetivo, progreso, activo, onCaptura, s
   // Carga del modelo (wasm y modelo servidos desde /public: funciona sin internet).
   useEffect(() => {
     let cancelado = false;
+    setListo(false);
+    setError(null);
     (async () => {
       try {
         const archivos = await FilesetResolver.forVisionTasks("/mediapipe");
-        const crear = (delegate: "GPU" | "CPU") =>
+        const crear = (modelAssetPath: string, delegate: "GPU" | "CPU") =>
           FaceLandmarker.createFromOptions(archivos, {
-            baseOptions: { modelAssetPath: "/models/face_landmarker.task", delegate },
+            baseOptions: { modelAssetPath, delegate },
             runningMode: "VIDEO",
             numFaces: 1,
           });
-        const fl = await crear("GPU").catch(() => crear("CPU"));
+        let fl: FaceLandmarker | null = null;
+        let ultimoError: unknown = null;
+        for (const ruta of RUTAS_MODELO) {
+          try {
+            fl = await crear(ruta, "GPU").catch(() => crear(ruta, "CPU"));
+            break;
+          } catch (e) {
+            ultimoError = e;
+          }
+        }
+        if (!fl) throw ultimoError ?? new Error("No se pudo cargar el modelo de reconocimiento facial.");
         if (cancelado) return fl.close();
         detector.current = fl;
         setListo(true);
       } catch (e) {
-        if (!cancelado) setError(e instanceof Error ? e.message : "No se pudo cargar el detector de caras.");
+        if (!cancelado) setError(e instanceof Error ? e.message : "No se pudo cargar el detector de caras. Toca la pantalla para reintentar.");
       }
     })();
     return () => {
@@ -66,7 +83,7 @@ export function useRastreoCara({ video, objetivo, progreso, activo, onCaptura, s
       detector.current?.close();
       detector.current = null;
     };
-  }, []);
+  }, [intento]);
 
   // Bucle por cuadro.
   useEffect(() => {

@@ -46,6 +46,18 @@ export default function Lente({ objetivo, banda, progreso, estado }: Props) {
         transition={{ duration: luz ? 0.35 : 1.2, ease: "easeOut" }}
       />
 
+      {/* Onda de gol: un anillo fino que se expande desde el lente al reconocer */}
+      {estado === "exito" && (
+        <motion.div
+          key="onda"
+          className="pointer-events-none absolute rounded-full border-2 border-verde-pantalla"
+          style={{ left: cx - exterior, top: cy - exterior, width: exterior * 2, height: exterior * 2 }}
+          initial={{ opacity: 0.7, scale: 1 }}
+          animate={{ opacity: 0, scale: 2.6 }}
+          transition={{ duration: 1.3, ease: [0.22, 1, 0.36, 1] }}
+        />
+      )}
+
       {/* Bisel de cristal: un anillo (el centro es la cámara) */}
       <div
         className="cristal pointer-events-none absolute rounded-full"

@@ -15,12 +15,14 @@ const FOTOS = [
 const CAMBIO_MS = 14_000;
 const EASE = [0.22, 1, 0.36, 1] as const;
 
-export type ModoFondo = "inicio" | "escaneo" | "resultado";
+export type ModoFondo = "inicio" | "escaneo" | "resultado" | "exito";
 
 const ASPECTO: Record<ModoFondo, { filter: string; scale: number }> = {
   inicio: { filter: "blur(0px) brightness(0.62) saturate(0.8) contrast(1.06)", scale: 1 },
   escaneo: { filter: "blur(30px) brightness(0.5) saturate(1.35) contrast(1)", scale: 1.14 },
-  resultado: { filter: "blur(38px) brightness(0.36) saturate(1.2) contrast(1)", scale: 1.18 },
+  resultado: { filter: "blur(24px) brightness(0.4) saturate(1.1) contrast(1)", scale: 1.16 },
+  // Al reconocer, la cancha se enciende: la foto vuelve casi nítida y luminosa tras el cristal.
+  exito: { filter: "blur(5px) brightness(0.78) saturate(1.2) contrast(1.05)", scale: 1.04 },
 };
 
 export default function FondoVivo({ seguimiento, modo }: { seguimiento: Seguimiento; modo: ModoFondo }) {
@@ -54,7 +56,7 @@ export default function FondoVivo({ seguimiento, modo }: { seguimiento: Seguimie
             profundidad={foto.profundidad}
             seguimiento={seguimiento}
             fuerza={0.04}
-            resolucion={modo === "inicio" ? 1 : 0.4}
+            resolucion={modo === "inicio" || modo === "exito" ? 1 : 0.4}
           />
         </motion.div>
       </AnimatePresence>

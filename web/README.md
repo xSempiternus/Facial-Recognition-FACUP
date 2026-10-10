@@ -5,16 +5,18 @@ Reemplaza al kiosko de Streamlit; el panel del staff sigue en Streamlit por ahor
 
 ## Cómo funciona
 
-- **Inicio** (sin nadie cerca): fotos de facupchile.cl en 3D. Un mapa de profundidad (MiDaS) mueve cada píxel
-  según qué tan cerca está; la foto se mueve sola, lento, y si alguien pasa sigue su cabeza como una ventana.
-  Al acercarse, la foto se cierra hacia el círculo central y aparece la cámara. Para sumar fotos:
+Dirección visual minimal, tipo Face ID: fondo negro, la cámara solo dentro de un círculo, un anillo de marcas
+finas y texto limpio (Geist). El único color es el verde FA CUP; ámbar y rojo solo para avisos.
+
+- **Inicio** (sin nadie cerca): fotos de facupchile.cl en 3D, oscurecidas con tono de cine. Un mapa de
+  profundidad (MiDaS) mueve cada píxel según qué tan cerca está; la foto se mueve sola, lento, y si alguien pasa
+  sigue su cabeza como una ventana. Al acercarse, se desvanece y aparece la cámara. Para sumar fotos:
   `python scripts/foto_inicio.py foto.jpg nombre` (desde la raíz) y agrégala a `FOTOS` en `Inicio.tsx`.
-- La cámara ocupa la pantalla y encima van las líneas de la cancha. El **círculo central** es donde va la cara.
-- **MediaPipe Face Landmarker** sigue la cara en el navegador (el video no sale del equipo): dibuja la malla,
-  guía al niño («Acércate un poco», «Al centro de la cancha») y llena el anillo mientras se queda quieto.
-- Al llenarse el anillo la foto **se saca sola** y se manda a la API (`POST /verify`, FastAPI + DeepFace).
-- Registrado: el círculo central se expande en verde y aparece su nombre. Ya registrado: lo mismo en verde oscuro.
-  Error: tarjeta amarilla (vuelve a intentar) o roja (llama al staff).
+- **MediaPipe Face Landmarker** sigue la cara en el navegador (el video no sale del equipo) y guía al niño
+  («Acércate un poco», «Centra tu cara»). Las marcas del anillo se encienden en verde mientras se queda quieto.
+- Al completarse el anillo la foto **se saca sola** y se manda a la API (`POST /verify`, FastAPI + DeepFace).
+- Registrado: el anillo queda verde, se dibuja un check y aparece su nombre con la hora. Si no lo reconoce, el
+  anillo se pone ámbar con el motivo; si el sistema falla, rojo.
 - Tras un resultado no vuelve a escanear a quien sigue frente a la cámara (hasta que salga o pasen 6 s).
 
 ## Uso
@@ -36,10 +38,9 @@ Parámetros de la URL:
 
 ```
 src/components/kiosko/Inicio.tsx         pantalla de inicio con fotos 3D (Foto3D.tsx: shader WebGL)
+src/components/kiosko/Escaner.tsx        anillo de marcas, progreso y check (SVG + Motion)
 src/components/kiosko/Kiosko.tsx         pantalla y estados (escaneando → enviando → resultado)
-src/components/kiosko/useRastreoCara.ts  MediaPipe: malla, postura, anillo y captura automática
-src/components/kiosko/Cancha.tsx         líneas de cal y anillo del círculo central (SVG + Motion)
-src/components/kiosko/Resultado.tsx      momento gol y tarjetas del árbitro
+src/components/kiosko/useRastreoCara.ts  MediaPipe: postura, progreso del anillo y captura automática
 src/components/kiosko/Mascota.tsx        mascota por estado (public/mascota/<estado>.png)
 src/lib/api.ts, src/lib/voz.ts           cliente de la API y saludo hablado
 scripts/preparar-mediapipe.mjs           copia el wasm y descarga el modelo (postinstall)

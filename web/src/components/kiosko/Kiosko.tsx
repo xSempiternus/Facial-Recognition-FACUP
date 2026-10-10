@@ -1,35 +1,44 @@
 "use client";
 
-// Kiosko de llegada FA CUP Chile: la pantalla es el marcador del estadio. La cámara ocupa todo, encima van las
-// líneas de cal y el círculo central es donde va la cara. Sin botones: al quedarse quieto en el círculo, la
-// foto se saca sola, la API reconoce al niño y su nombre aparece en grande.
+// Kiosko de llegada FA CUP Chile, dirección minimal (tipo Face ID): fondo negro, la cámara solo dentro de un
+// círculo, un anillo de marcas finas que se enciende en verde y texto limpio debajo. Sin botones: al quedarse
+// quieto frente al círculo, la foto se saca sola, la API reconoce al niño y su nombre aparece abajo.
 
 import { AnimatePresence, motion, MotionConfig, useMotionValue } from "motion/react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hablar } from "@/lib/voz";
 import { llegadasDeHoy, verificar, type Verificacion } from "@/lib/api";
-import Cancha from "./Cancha";
+import Escaner, { type EstadoEscaner } from "./Escaner";
 import Inicio from "./Inicio";
-import Mascota from "./Mascota";
-import Resultado, { type Llegada } from "./Resultado";
+import Mascota, { type EstadoMascota } from "./Mascota";
 import { useRastreoCara, type Objetivo, type Postura } from "./useRastreoCara";
 
 const MOSTRAR_RESULTADO_MS = 4200;
 const ESPERA_MISMO_NIÑO_MS = 6000; // tras un resultado, no vuelve a escanear a quien sigue frente a la cámara
 const INICIO_TRAS_MS = 1500; // sin nadie cerca este tiempo → pantalla de inicio
+const EASE = [0.22, 1, 0.36, 1] as const;
 
-const GUIA: Record<Postura, { titulo: string; sub: string }> = {
-  "sin-cara": { titulo: "Entra a la cancha", sub: "Ponte frente a la pantalla para marcar tu llegada" },
-  lejos: { titulo: "Acércate un poco", sub: "Tu cara tiene que llenar el círculo" },
-  cerca: { titulo: "Un pasito atrás", sub: "Estás muy cerca de la cámara" },
-  descentrado: { titulo: "Al centro de la cancha", sub: "Pon tu cara dentro del círculo" },
-  quieto: { titulo: "¡Quieto ahí!", sub: "Te estamos reconociendo" },
+type Resultado = {
+  tono: "exito" | "aviso" | "error";
+  titulo: string;
+  sub: string;
+  detalle?: string | null; // categoría, en gris
+  grande?: boolean; // el nombre se muestra más grande que un mensaje
+  mascota: EstadoMascota;
 };
 
-// Círculo central: ahí va la cara (un poco sobre la mitad, para dejar espacio a la guía de abajo).
+const GUIA: Record<Postura, { titulo: string; sub: string }> = {
+  "sin-cara": { titulo: "Mira a la cámara", sub: "Tu llegada se registra sola" },
+  lejos: { titulo: "Acércate un poco", sub: "Tu cara debe llenar el círculo" },
+  cerca: { titulo: "Aléjate un poco", sub: "Estás muy cerca de la cámara" },
+  descentrado: { titulo: "Centra tu cara", sub: "Ponla dentro del círculo" },
+  quieto: { titulo: "Mantén la posición", sub: "Te estamos reconociendo" },
+};
+
+// Círculo de la cámara: centrado y un poco arriba, para dejar espacio al texto.
 function calcularObjetivo(ancho: number, alto: number): Objetivo {
-  return { cx: ancho / 2, cy: alto * 0.47, r: Math.min(ancho, alto) * 0.24 };
+  return { cx: ancho / 2, cy: alto * 0.42, r: Math.min(ancho, alto) * 0.25 };
 }
 
 // Tamaño de la ventana como estado externo (se actualiza al redimensionar).
@@ -45,38 +54,41 @@ function useTamañoPantalla() {
   return { ancho, alto };
 }
 
-function aLlegada(v: Verificacion): { llegada: Llegada; frase: string | null } {
+function aResultado(v: Verificacion): { resultado: Resultado; frase: string | null } {
   if (v.ok) {
     const nombre = v.nombre.split(" ")[0];
+    const hora = v.registradoALas?.slice(11, 16);
     if (v.yaRegistrado) {
-      const hora = v.registradoALas?.slice(11, 16);
       return {
-        llegada: { tipo: "de-nuevo", nombre, categoria: v.categoria, sub: hora ? `Ya estabas anotado a las ${hora}.` : "Ya estabas anotado hoy.", mascota: "de_nuevo" },
-        frase: `¡Hola de nuevo, ${nombre}! Ya estabas anotado.`,
+        resultado: {
+          tono: "exito", titulo: nombre, grande: true, detalle: v.categoria,
+          sub: hora ? `Ya estabas registrado hoy a las ${hora}` : "Ya estabas registrado hoy", mascota: "de_nuevo",
+        },
+        frase: `¡Hola de nuevo, ${nombre}!`,
       };
     }
+    const ahora = new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
     return {
-      llegada: { tipo: "gol", nombre, categoria: v.categoria, sub: "Tu llegada quedó registrada. ¡A jugar!", mascota: "celebra" },
+      resultado: { tono: "exito", titulo: nombre, grande: true, detalle: v.categoria, sub: `Llegada registrada a las ${ahora}`, mascota: "celebra" },
       frase: `¡Hola, ${nombre}! ¡A jugar!`,
     };
   }
   switch (v.codigo) {
     case "sin_rostro":
-      return { llegada: { tipo: "amarilla", titulo: "No vimos tu cara", sub: "Mira la cámara y prueba otra vez.", mascota: "no_veo" }, frase: "No vimos tu cara. Prueba otra vez." };
+      return { resultado: { tono: "aviso", titulo: "No detectamos tu cara", sub: "Mira de frente a la cámara, con buena luz", mascota: "no_veo" }, frase: "No detectamos tu cara. Prueba otra vez." };
     case "foto_falsa":
-      return { llegada: { tipo: "amarilla", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara.", mascota: "foto_falsa" }, frase: "Usa tu cara, no una foto." };
+      return { resultado: { tono: "aviso", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara", mascota: "foto_falsa" }, frase: "Usa tu cara, no una foto." };
     case "no_reconocido":
-      return { llegada: { tipo: "amarilla", titulo: "No te reconocimos", sub: "Prueba otra vez o busca a tu entrenador.", mascota: "no_reconoce" }, frase: "No te reconocimos. Prueba otra vez o busca a tu entrenador." };
+      return { resultado: { tono: "aviso", titulo: "No te reconocimos", sub: "Intenta de nuevo o avisa a tu entrenador", mascota: "no_reconoce" }, frase: "No te reconocimos. Intenta de nuevo o avisa a tu entrenador." };
     case "sin_jugadores":
-      return { llegada: { tipo: "roja", titulo: "Aún no hay jugadores", sub: "El staff tiene que inscribirlos primero.", mascota: "error" }, frase: null };
+      return { resultado: { tono: "error", titulo: "Aún no hay jugadores inscritos", sub: "El staff debe inscribirlos primero", mascota: "error" }, frase: null };
     default:
-      return { llegada: { tipo: "roja", titulo: "Sistema sin conexión", sub: "Avísale a tu entrenador.", mascota: "error" }, frase: null };
+      return { resultado: { tono: "error", titulo: "Sistema no disponible", sub: "Avisa al staff", mascota: "error" }, frase: null };
   }
 }
 
 export default function Kiosko() {
   const video = useRef<HTMLVideoElement>(null);
-  const lienzo = useRef<HTMLCanvasElement>(null);
   const progreso = useMotionValue(0);
 
   const { ancho, alto } = useTamañoPantalla();
@@ -85,9 +97,10 @@ export default function Kiosko() {
   useEffect(() => {
     objetivo.current = circulo;
   }, [circulo]);
+
   const [errorCamara, setErrorCamara] = useState<string | null>(null);
   const [fase, setFase] = useState<"escaneando" | "enviando" | "resultado">("escaneando");
-  const [llegada, setLlegada] = useState<Llegada | null>(null);
+  const [resultado, setResultado] = useState<Resultado | null>(null);
   const [hoy, setHoy] = useState<number | null>(null);
   const [esperarSalida, setEsperarSalida] = useState(false);
   const voz = useRef(true);
@@ -117,7 +130,7 @@ export default function Kiosko() {
         video.current.play().catch(() => {});
       }
     })().catch((e) =>
-      setErrorCamara(e instanceof DOMException ? "Permite el acceso a la cámara para marcar asistencia." : String(e.message ?? e)),
+      setErrorCamara(e instanceof DOMException ? "Permite el acceso a la cámara para registrar llegadas." : String(e.message ?? e)),
     );
     return () => {
       cancelado = true;
@@ -136,9 +149,9 @@ export default function Kiosko() {
   const alCapturar = useCallback(async (foto: Blob) => {
     setFase("enviando");
     const v = await verificar(foto);
-    const { llegada, frase } = aLlegada(v);
+    const { resultado, frase } = aResultado(v);
     if (v.ok && !v.yaRegistrado) setHoy((n) => (n === null ? n : n + 1));
-    setLlegada(llegada);
+    setResultado(resultado);
     setFase("resultado");
     if (frase && voz.current) hablar(frase);
   }, []);
@@ -151,7 +164,6 @@ export default function Kiosko() {
 
   const { listo, error: errorModelo, postura } = useRastreoCara({
     video,
-    lienzo,
     objetivo,
     progreso,
     activo: fase === "escaneando" && !esperarSalida,
@@ -159,17 +171,9 @@ export default function Kiosko() {
     seguimiento,
   });
 
-  // Pantalla de inicio: cuando no hay nadie cerca por un momento (sin parpadeos si alguien pasa rápido).
-  const lejos = postura === "sin-cara" || postura === "lejos";
-  const [inicioArmado, setInicioArmado] = useState(true);
-  useEffect(() => {
-    const id = setTimeout(() => setInicioArmado(lejos), lejos ? INICIO_TRAS_MS : 0);
-    return () => clearTimeout(id);
-  }, [lejos]);
-
-  // Fin del resultado: vuelve a la cancha, pero espera a que el niño se vaya (o pasen unos segundos).
+  // Fin del resultado: vuelve a escanear, pero espera a que el niño se vaya (o pasen unos segundos).
   const terminarResultado = useCallback(() => {
-    setLlegada(null);
+    setResultado(null);
     setFase("escaneando");
     setEsperarSalida(true);
   }, []);
@@ -184,123 +188,130 @@ export default function Kiosko() {
     return () => clearTimeout(id);
   }, [esperarSalida, postura]);
 
-  const guia =
-    errorCamara || errorModelo
-      ? { titulo: "Cámara no disponible", sub: errorCamara ?? "No se pudo iniciar el reconocimiento. Avísale a tu entrenador." }
-      : !listo
-        ? { titulo: "Preparando la cancha", sub: "Un segundo…" }
-        : fase === "enviando"
-          ? { titulo: "Revisando la jugada…", sub: "Buscándote en el plantel" }
-          : esperarSalida && postura !== "sin-cara"
-            ? { titulo: "¡Listo!", sub: "Deja pasar al siguiente" }
-            : GUIA[postura];
+  // Pantalla de inicio: cuando no hay nadie cerca por un momento (sin parpadeos si alguien pasa rápido).
+  const lejos = postura === "sin-cara" || postura === "lejos";
+  const [inicioArmado, setInicioArmado] = useState(true);
+  useEffect(() => {
+    const id = setTimeout(() => setInicioArmado(lejos), lejos ? INICIO_TRAS_MS : 0);
+    return () => clearTimeout(id);
+  }, [lejos]);
 
   const sinCamara = Boolean(errorCamara || errorModelo);
   const mostrarInicio = !sinCamara && fase === "escaneando" && !esperarSalida && (!listo || (lejos && inicioArmado));
+
+  // Qué dice la pantalla y de qué color va el anillo.
+  let texto: { titulo: string; sub: string; detalle?: string | null; grande?: boolean };
+  let estado: EstadoEscaner;
+  if (sinCamara) {
+    texto = { titulo: "Cámara no disponible", sub: errorCamara ?? "No se pudo iniciar el reconocimiento. Avisa al staff." };
+    estado = "error";
+  } else if (fase === "resultado" && resultado) {
+    texto = resultado;
+    estado = resultado.tono;
+  } else if (fase === "enviando") {
+    texto = { titulo: "Verificando…", sub: "Un momento" };
+    estado = "verificando";
+  } else if (esperarSalida && postura !== "sin-cara") {
+    texto = { titulo: "Listo", sub: "Puede pasar el siguiente" };
+    estado = "espera";
+  } else {
+    texto = GUIA[postura];
+    estado = postura === "quieto" ? "quieto" : postura === "sin-cara" ? "espera" : "ajustando";
+  }
   const textoInicio = !listo
-    ? { titulo: "Preparando la cancha", sub: "Un segundo…" }
+    ? { titulo: "Preparando", sub: "Un momento" }
     : postura !== "sin-cara" // hay alguien: se mantiene mientras la foto se abre hacia la cámara
-      ? { titulo: "Acércate un poco más", sub: "Tu llegada se marca sola al ponerte frente a la pantalla" }
-      : { titulo: "Entra a la cancha", sub: "Ponte frente a la pantalla: tu llegada se marca sola" };
+      ? { titulo: "Acércate a la pantalla", sub: "Tu llegada se registra sola" }
+      : { titulo: "Bienvenido", sub: "Acércate a la pantalla para registrar tu llegada" };
+
+  const { cx, cy, r } = circulo;
+  const resultadoVisible = fase === "resultado";
 
   return (
     <MotionConfig reducedMotion="user">
-      <main className="relative h-dvh w-screen overflow-hidden bg-noche">
-        {/* Cámara a pantalla completa, en espejo, con tono de cancha nocturna */}
-        <video
+      <main
+        className="relative h-dvh w-screen overflow-hidden bg-fondo"
+        onClick={() => resultadoVisible && prueba.current && terminarResultado()}
+      >
+        {/* Cámara: solo dentro del círculo, en espejo. Se oscurece al mostrar un resultado. */}
+        <motion.video
           ref={video}
           muted
           playsInline
-          className="absolute inset-0 h-full w-full -scale-x-100 object-cover saturate-[.85] contrast-[1.05]"
-        />
-        <div
-          className="pointer-events-none absolute inset-0"
+          className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
           style={{
-            background:
-              "radial-gradient(ellipse 60% 70% at 50% 47%, rgba(3,20,10,0) 0%, rgba(3,20,10,.55) 60%, rgba(3,20,10,.92) 100%)," +
-              "linear-gradient(180deg, rgba(3,20,10,.75) 0%, rgba(3,20,10,0) 22%, rgba(3,20,10,0) 70%, rgba(3,20,10,.9) 100%)",
+            WebkitMaskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
+            maskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
           }}
-        />
-        {/* Luz de estadio que barre lento la parte alta (único movimiento ambiental) */}
-        <motion.div
-          className="pointer-events-none absolute -top-1/3 h-[70%] w-[45%] rounded-full bg-lima/10 blur-3xl"
-          animate={{ left: ["-10%", "65%", "-10%"] }}
-          transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
+          animate={{ filter: resultadoVisible ? "brightness(0.32) saturate(0.6) blur(6px)" : "brightness(1) saturate(0.95) blur(0px)" }}
+          transition={{ duration: 0.5, ease: EASE }}
         />
 
-        <canvas ref={lienzo} className="pointer-events-none absolute inset-0 h-full w-full" />
-        <Cancha ancho={ancho} alto={alto} objetivo={circulo} progreso={progreso} postura={postura} />
+        <Escaner objetivo={circulo} progreso={progreso} estado={estado} />
 
         {/* Inicio: fotos 3D de FA CUP mientras no hay nadie cerca */}
         <AnimatePresence>
-          {mostrarInicio && (
-            <Inicio key="inicio" objetivo={circulo} seguimiento={seguimiento} titulo={textoInicio.titulo} sub={textoInicio.sub} />
-          )}
+          {mostrarInicio && <Inicio key="inicio" seguimiento={seguimiento} titulo={textoInicio.titulo} sub={textoInicio.sub} />}
         </AnimatePresence>
 
-        {/* Marcador superior */}
-        <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-[5vw] pt-[3.2vh]">
-          <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.2 }}>
-            <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(34px,5vh,50px)] w-auto" />
-          </motion.div>
-          <motion.div
-            className="flex items-center gap-4 rounded-full border border-cal/15 bg-noche/50 py-2 pl-4 pr-5 backdrop-blur-md"
-            initial={{ opacity: 0, y: -12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.3 }}
-          >
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-lima/70" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-lima" />
-            </span>
-            <span className="text-lg text-cal/70">En vivo</span>
-            {hoy !== null && (
-              <span className="flex items-baseline gap-2">
-                <motion.b
-                  key={hoy}
-                  className="tabular font-display text-2xl text-white"
-                  initial={{ y: -14, opacity: 0 }}
-                  animate={{ y: 0, opacity: 1 }}
-                  transition={{ type: "spring", stiffness: 300, damping: 20 }}
-                >
-                  {hoy}
-                </motion.b>
-                <span className="text-lg text-cal/70">{hoy === 1 ? "llegada hoy" : "llegadas hoy"}</span>
-              </span>
-            )}
-          </motion.div>
+        {/* Barra superior: logo y llegadas del día, discretos */}
+        <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-[4vw] pt-[4vh]">
+          <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(26px,3.6vh,36px)] w-auto opacity-90" />
+          {hoy !== null && (
+            <p className="text-[clamp(0.95rem,1.25vw,1.15rem)] text-texto-2">
+              <motion.span
+                key={hoy}
+                className="tabular mr-1.5 font-medium text-texto"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, ease: EASE }}
+              >
+                {hoy}
+              </motion.span>
+              {hoy === 1 ? "llegada hoy" : "llegadas hoy"}
+            </p>
+          )}
         </header>
 
-        {/* Guía: cambia con un fundido desenfocado, sin saltos */}
-        <div className="absolute inset-x-0 bottom-[6vh] z-20 flex flex-col items-center px-6 text-center">
-          <AnimatePresence mode="wait">
-            {!mostrarInicio && <motion.div
-              key={guia.titulo}
-              initial={{ opacity: 0, y: 18, filter: "blur(10px)" }}
-              animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-              exit={{ opacity: 0, y: -12, filter: "blur(10px)" }}
-              transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-            >
-              <h1 className="font-display text-[clamp(2.6rem,5.2vw,4.6rem)] font-bold leading-none text-white drop-shadow-[0_6px_24px_rgba(0,0,0,.5)]">
-                {guia.titulo}
-              </h1>
-              <p className="mt-3 text-[clamp(1.1rem,1.8vw,1.6rem)] text-cal/70">{guia.sub}</p>
-            </motion.div>}
-          </AnimatePresence>
-        </div>
+        {/* Texto bajo el círculo */}
+        {!mostrarInicio && (
+          <div
+            className="absolute inset-x-0 z-20 flex flex-col items-center px-6 text-center"
+            style={{ top: cy + r + 56 }}
+          >
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={texto.titulo + texto.sub}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.3, ease: EASE }}
+              >
+                <h1
+                  className={`font-semibold tracking-[-0.02em] text-texto ${
+                    texto.grande ? "text-[clamp(3rem,5.4vw,4.8rem)] leading-none" : "text-[clamp(1.9rem,3vw,2.6rem)] leading-tight"
+                  }`}
+                >
+                  {texto.titulo}
+                </h1>
+                <p className="mt-2.5 text-[clamp(1.05rem,1.5vw,1.35rem)] text-texto-2">
+                  {texto.detalle && <span className="text-texto-3">{texto.detalle}&nbsp;&nbsp;</span>}
+                  {texto.sub}
+                </p>
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        )}
 
-        {/* Mascota de bienvenida (aparece cuando existan sus imágenes) */}
-        <div className="absolute bottom-[4vh] left-[5vw] z-20">
-          <Mascota estado={fase === "enviando" ? "buscando" : "bienvenida"} tamaño={Math.round(alto * 0.26)} />
-        </div>
-
-        <AnimatePresence>
-          {llegada && (
-            <div key="resultado" onClick={() => fase === "resultado" && terminarResultado()}>
-              <Resultado llegada={llegada} objetivo={circulo} />
-            </div>
-          )}
-        </AnimatePresence>
+        {/* Mascota (aparece cuando existan sus imágenes en public/mascota/) */}
+        {!mostrarInicio && (
+          <div className="absolute bottom-[5vh] left-[4vw] z-20">
+            <Mascota
+              estado={resultado?.mascota ?? (fase === "enviando" ? "buscando" : "bienvenida")}
+              tamaño={Math.round(alto * 0.24)}
+            />
+          </div>
+        )}
       </main>
     </MotionConfig>
   );

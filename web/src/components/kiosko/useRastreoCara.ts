@@ -1,8 +1,8 @@
 "use client";
 
 // Rastreo de la cara en el navegador (MediaPipe Face Landmarker, 100 % local: el video no sale del equipo).
-// Cada cuadro: dibuja la malla sobre la cara, decide la "postura" (lejos, cerca, descentrado, quieto) y llena
-// el anillo del círculo central mientras el niño se queda quieto. Al completarse, saca la foto sola.
+// Cada cuadro decide la "postura" (lejos, cerca, descentrado, quieto) y llena el anillo del círculo central
+// mientras el niño se queda quieto. Al completarse, saca la foto sola.
 
 import { FaceLandmarker, FilesetResolver, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import type { MotionValue } from "motion/react";
@@ -15,12 +15,8 @@ export type Objetivo = { cx: number; cy: number; r: number }; // círculo centra
 const MANTENER_MS = 900; // tiempo quieto en el círculo para sacar la foto
 const PERDER_MS = 350; // si se mueve, el anillo se vacía en este tiempo
 
-// Malla: un punto de cada tantos (la malla completa tiene 478) + contorno de la cara.
-const PASO_MALLA = 3;
-
 type Opciones = {
   video: RefObject<HTMLVideoElement | null>;
-  lienzo: RefObject<HTMLCanvasElement | null>;
   objetivo: RefObject<Objetivo>;
   progreso: MotionValue<number>;
   activo: boolean;
@@ -29,7 +25,7 @@ type Opciones = {
   seguimiento?: Seguimiento;
 };
 
-export function useRastreoCara({ video, lienzo, objetivo, progreso, activo, onCaptura, seguimiento }: Opciones) {
+export function useRastreoCara({ video, objetivo, progreso, activo, onCaptura, seguimiento }: Opciones) {
   const [listo, setListo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [postura, setPostura] = useState<Postura>("sin-cara");
@@ -85,9 +81,8 @@ export function useRastreoCara({ video, lienzo, objetivo, progreso, activo, onCa
     const cuadro = () => {
       raf = requestAnimationFrame(cuadro);
       const v = video.current;
-      const c = lienzo.current;
       const fl = detector.current;
-      if (!v || !c || !fl || v.readyState < 2 || !v.videoWidth) return;
+      if (!v || !fl || v.readyState < 2 || !v.videoWidth) return;
 
       const ahora = performance.now();
       const dt = Math.min(ahora - ultimoMs, 100);
@@ -95,18 +90,9 @@ export function useRastreoCara({ video, lienzo, objetivo, progreso, activo, onCa
       if (v.currentTime === ultimoTiempoVideo) return;
       ultimoTiempoVideo = v.currentTime;
 
-      // Lienzo del tamaño de la pantalla (nítido en pantallas de alta densidad).
-      const dpr = window.devicePixelRatio || 1;
-      const W = c.clientWidth;
-      const H = c.clientHeight;
-      if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) {
-        c.width = Math.round(W * dpr);
-        c.height = Math.round(H * dpr);
-      }
-      const ctx = c.getContext("2d");
-      if (!ctx) return;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, W, H);
+      // El video cubre la pantalla (object-fit: cover), así que se mide en px de pantalla.
+      const W = window.innerWidth;
+      const H = window.innerHeight;
 
       const resultado = fl.detectForVideo(v, ahora);
       const puntos = resultado.faceLandmarks[0];
@@ -148,7 +134,6 @@ export function useRastreoCara({ video, lienzo, objetivo, progreso, activo, onCa
         seguimiento?.y.set((centro.y / H - 0.5) * 2);
         seguimiento?.presente.set(1);
 
-        dibujarMalla(ctx, pts, nueva === "quieto");
       } else {
         centroPrevio = null;
         seguimiento?.presente.set(0);
@@ -179,28 +164,9 @@ export function useRastreoCara({ video, lienzo, objetivo, progreso, activo, onCa
     };
     raf = requestAnimationFrame(cuadro);
     return () => cancelAnimationFrame(raf);
-  }, [listo, video, lienzo, objetivo, progreso, seguimiento]);
+  }, [listo, video, objetivo, progreso, seguimiento]);
 
   return { listo, error, postura };
-}
-
-function dibujarMalla(ctx: CanvasRenderingContext2D, pts: { x: number; y: number }[], enfocado: boolean) {
-  // Puntos de la malla: lima cuando está centrado, cal tenue mientras se acomoda.
-  ctx.fillStyle = enfocado ? "rgba(149, 193, 31, 0.85)" : "rgba(234, 245, 228, 0.45)";
-  for (let i = 0; i < pts.length; i += PASO_MALLA) {
-    ctx.beginPath();
-    ctx.arc(pts[i].x, pts[i].y, enfocado ? 1.6 : 1.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // Contorno de la cara.
-  ctx.strokeStyle = enfocado ? "rgba(149, 193, 31, 0.9)" : "rgba(234, 245, 228, 0.35)";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  for (const { start, end } of FaceLandmarker.FACE_LANDMARKS_FACE_OVAL) {
-    ctx.moveTo(pts[start].x, pts[start].y);
-    ctx.lineTo(pts[end].x, pts[end].y);
-  }
-  ctx.stroke();
 }
 
 /** Cuadro actual de la cámara como JPEG, sin espejo (como lo vería cualquier otra cámara). */

@@ -2,13 +2,11 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 
-// Tipografía oficial FA CUP Chile (PlutoSans Condensed).
-const pluto = localFont({
-  src: [
-    { path: "../fonts/PlutoSansCondRegular.otf", weight: "400", style: "normal" },
-    { path: "../fonts/PlutoSansCondBold.otf", weight: "700", style: "normal" },
-  ],
-  variable: "--font-pluto",
+// Geist (OFL, ver src/fonts/Geist-LICENSE.txt): sans neutra y precisa. Local: el kiosko funciona sin internet.
+const geist = localFont({
+  src: "../fonts/Geist-Variable.woff2",
+  weight: "100 900",
+  variable: "--font-geist",
   display: "swap",
 });
 
@@ -18,12 +16,12 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#03140a",
+  themeColor: "#050706",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="es" className={`${pluto.variable} h-full`}>
+    <html lang="es" className={`${geist.variable} h-full`}>
       <body className="h-full">{children}</body>
     </html>
   );

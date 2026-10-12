@@ -15,6 +15,14 @@ const nextConfig: NextConfig = {
       },
     },
   },
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [{ key: "Permissions-Policy", value: "camera=(self)" }],
+      },
+    ];
+  },
   rewrites() {
     return [{ source: "/api/:path*", destination: `${API_URL}/:path*` }];
   },

@@ -36,10 +36,10 @@ export async function verificar(foto: Blob, señal?: AbortSignal): Promise<Verif
 /** Cantidad de llegadas registradas hoy (null si el servidor no responde). */
 export async function llegadasDeHoy(): Promise<number | null> {
   try {
-    const resp = await fetch("/api/asistencias?hoy=true&limit=1000", { cache: "no-store" });
+    const resp = await fetch("/api/kiosko/resumen", { cache: "no-store" });
     if (!resp.ok) return null;
-    const lista = await resp.json();
-    return Array.isArray(lista) ? lista.length : null;
+    const data = await resp.json();
+    return typeof data?.llegadas_hoy === "number" ? data.llegadas_hoy : null;
   } catch {
     return null;
   }

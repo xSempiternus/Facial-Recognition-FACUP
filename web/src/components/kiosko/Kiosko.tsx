@@ -119,7 +119,23 @@ function aResultado(v: Verificacion): { resultado: Resultado; frase: string | nu
   }
 }
 
+// Vista previa de estados para diseño/QA: ?demo=reconocido|ya|noreconoce|sinrostro|error|escaneando.
+// Solo existe fuera de producción; en producción el parámetro se ignora.
+const suscribirNada = () => () => {};
+const demoActual = () => (process.env.NODE_ENV === "production" ? "" : new URLSearchParams(window.location.search).get("demo") ?? "");
+function useDemo() {
+  return useSyncExternalStore(suscribirNada, demoActual, () => "");
+}
+const DEMO_VERIFICACION: Record<string, Verificacion> = {
+  reconocido: { ok: true, nombre: "Matías Soto", categoria: "Sub-10", yaRegistrado: false, registradoALas: null, similitud: 0.9 },
+  ya: { ok: true, nombre: "Matías Soto", categoria: "Sub-10", yaRegistrado: true, registradoALas: "2026-10-28T09:12:00", similitud: 0.9 },
+  noreconoce: { ok: false, codigo: "no_reconocido", mensaje: "" },
+  sinrostro: { ok: false, codigo: "sin_rostro", mensaje: "" },
+  error: { ok: false, codigo: "error_servidor", mensaje: "" },
+};
+
 export default function Kiosko() {
+  const demo = useDemo();
   const video = useRef<HTMLVideoElement>(null);
   const progreso = useMotionValue(0);
 
@@ -132,8 +148,8 @@ export default function Kiosko() {
 
   const [errorCamara, setErrorCamara] = useState<string | null>(null);
   const [intento, setIntento] = useState(0);
-  const [fase, setFase] = useState<"escaneando" | "enviando" | "resultado">("escaneando");
-  const [resultado, setResultado] = useState<Resultado | null>(null);
+  const [faseReal, setFase] = useState<"escaneando" | "enviando" | "resultado">("escaneando");
+  const [resultadoReal, setResultado] = useState<Resultado | null>(null);
   const [hoy, setHoy] = useState<number | null>(null);
   const [esperarSalida, setEsperarSalida] = useState(false);
   const voz = useRef(true);
@@ -211,18 +227,18 @@ export default function Kiosko() {
   const caraPresente = useMotionValue(0);
   const seguimiento = useMemo(() => ({ x: caraX, y: caraY, presente: caraPresente }), [caraX, caraY, caraPresente]);
 
-  const { listo, error: errorModelo, postura } = useRastreoCara({
+  const { listo: listoReal, error: errorModeloReal, postura: posturaReal } = useRastreoCara({
     video,
     objetivo,
     progreso,
-    activo: fase === "escaneando" && !esperarSalida,
+    activo: faseReal === "escaneando" && !esperarSalida,
     intento,
     onCaptura: alCapturar,
     seguimiento,
   });
 
   useEffect(() => {
-    if (!errorModelo || errorCamara) return;
+    if (!errorModeloReal || errorCamara) return;
     let reintentado = false;
     const reintentar = () => {
       if (reintentado) return;
@@ -235,7 +251,19 @@ export default function Kiosko() {
       window.removeEventListener("pointerdown", reintentar);
       window.removeEventListener("keydown", reintentar);
     };
-  }, [errorCamara, errorModelo]);
+  }, [errorCamara, errorModeloReal]);
+
+  // Vista previa (solo desarrollo): fuerza fase/resultado/postura sin cámara.
+  const demoResultado = useMemo(() => (demo && DEMO_VERIFICACION[demo] ? aResultado(DEMO_VERIFICACION[demo]).resultado : null), [demo]);
+  const enDemo = demo !== "";
+  const fase = demoResultado ? "resultado" : faseReal;
+  const resultado = demoResultado ?? resultadoReal;
+  const listo = enDemo || listoReal;
+  const errorModelo = enDemo ? null : errorModeloReal;
+  const postura: Postura = demo === "escaneando" ? "quieto" : demo === "inicio" ? "sin-cara" : enDemo ? "cerca" : posturaReal;
+  useEffect(() => {
+    if (demo === "escaneando") progreso.set(0.62);
+  }, [demo, progreso]);
 
   // Fin del resultado: vuelve a escanear, pero espera a que el niño se vaya (o pasen unos segundos).
   const terminarResultado = useCallback(() => {
@@ -262,7 +290,7 @@ export default function Kiosko() {
     return () => clearTimeout(id);
   }, [lejos]);
 
-  const sinCamara = Boolean(errorCamara || errorModelo);
+  const sinCamara = enDemo ? demo === "camara" : Boolean(errorCamara || errorModelo);
   const mostrarInicio = !sinCamara && fase === "escaneando" && !esperarSalida && (!listo || (lejos && inicioArmado));
 
   // Qué dice la pantalla y de qué color va el anillo.
@@ -286,6 +314,10 @@ export default function Kiosko() {
   } else {
     texto = GUIA[postura];
     estado = postura === "quieto" ? "quieto" : postura === "sin-cara" ? "espera" : "ajustando";
+  }
+  if (enDemo && demo === "camara") {
+    texto = { titulo: "Cámara no disponible", sub: "Permite el acceso a la cámara en el navegador y toca la pantalla para reintentar." };
+    estado = "error";
   }
   const textoInicio = !listo
     ? { titulo: "Preparando", sub: "Un momento" }
@@ -345,21 +377,26 @@ export default function Kiosko() {
         </AnimatePresence>
 
         {/* Barra superior: logo y llegadas del día, discretos */}
-        <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-[4vw] pt-[4vh]">
-          <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(32px,4.6vh,46px)] w-auto" />
+        <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-4 px-[max(1rem,4vw)] pt-[max(1rem,3.5vh)]">
+          <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(30px,4.4vh,44px)] w-auto drop-shadow-[0_2px_8px_rgba(0,0,0,.45)]" />
           {hoy !== null && (
-            <p className="flex items-baseline gap-2 text-[clamp(0.9rem,1.3vw,1.1rem)] text-texto/80">
+            <motion.p
+              className="cristal flex min-h-11 items-center gap-2.5 rounded-[20px] px-4 py-2 text-[clamp(0.9rem,1.3vw,1.05rem)] text-texto/85"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ type: "spring", stiffness: 200, damping: 24 }}
+            >
               <motion.span
                 key={hoy}
-                className="tabular text-[clamp(1.6rem,3vw,2.4rem)] font-semibold leading-none tracking-[-0.03em] text-verde-pantalla"
+                className="tabular text-[clamp(1.4rem,2.6vw,2rem)] font-semibold leading-none tracking-[-0.03em] text-texto"
                 initial={{ opacity: 0, y: -6 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4, ease: EASE }}
+                transition={{ type: "spring", stiffness: 300, damping: 22 }}
               >
                 {hoy}
               </motion.span>
               {hoy === 1 ? "llegada hoy" : "llegadas hoy"}
-            </p>
+            </motion.p>
           )}
         </header>
 
@@ -377,11 +414,8 @@ export default function Kiosko() {
             >
               <motion.div
                 layout
-                className="cristal w-full max-w-[640px] overflow-hidden rounded-[22px] px-7 py-5 text-center sm:px-10 sm:py-6"
-                style={{
-                  borderColor: exito ? "rgba(31,179,90,.55)" : undefined,
-                  boxShadow: exito ? "inset 0 1px 0 rgb(255 255 255 / .28), 0 0 80px rgba(31,179,90,.28), 0 24px 70px rgb(0 0 0 / .4)" : undefined,
-                }}
+                className="cristal w-full max-w-[660px] rounded-[34px] px-7 py-6 text-center sm:px-12 sm:py-7"
+                data-tono={resultadoVisible ? resultado?.tono : sinCamara ? "error" : undefined}
                 transition={{ layout: { type: "spring", stiffness: 260, damping: 30 } }}
               >
                 <AnimatePresence mode="wait" initial={false}>
@@ -399,8 +433,8 @@ export default function Kiosko() {
                     >
                       {texto.titulo}
                     </h1>
-                    <p className="mt-2 text-[clamp(1rem,2vw,1.25rem)] leading-snug text-texto-2">
-                      {texto.detalle && <span className="font-medium text-verde-pantalla">{texto.detalle}&nbsp;&nbsp;</span>}
+                    <p className="mt-2 text-balance text-[clamp(1rem,2vw,1.25rem)] leading-snug text-texto-2">
+                      {texto.detalle && <span className="mr-2.5 inline-block rounded-full bg-white/12 px-2.5 py-0.5 align-[0.08em] text-[0.82em] font-medium text-texto">{texto.detalle}</span>}
                       {texto.sub}
                     </p>
                   </motion.div>

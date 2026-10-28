@@ -35,6 +35,14 @@ export function useRastreoCara({ video, objetivo, progreso, activo, intento, onC
   const [error, setError] = useState<string | null>(null);
   const [postura, setPostura] = useState<Postura>("sin-cara");
 
+  // Al reintentar (cambia `intento`) se reinicia el estado durante el render, no dentro del efecto.
+  const [intentoVisto, setIntentoVisto] = useState(intento);
+  if (intentoVisto !== intento) {
+    setIntentoVisto(intento);
+    setListo(false);
+    setError(null);
+  }
+
   const detector = useRef<FaceLandmarker | null>(null);
   const activoRef = useRef(activo);
   const capturaRef = useRef(onCaptura);
@@ -49,8 +57,6 @@ export function useRastreoCara({ video, objetivo, progreso, activo, intento, onC
   // Carga del modelo (wasm y modelo servidos desde /public: funciona sin internet).
   useEffect(() => {
     let cancelado = false;
-    setListo(false);
-    setError(null);
     (async () => {
       try {
         const archivos = await FilesetResolver.forVisionTasks("/mediapipe");

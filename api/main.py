@@ -1,4 +1,4 @@
- """API FastAPI: enrolamiento y verificación facial de jugadores."""
+"""API FastAPI: enrolamiento y verificación facial de jugadores."""
 
 import asyncio
 import base64

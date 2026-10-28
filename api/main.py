@@ -9,12 +9,13 @@ import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from api import auth
 from src import cv_engine, db_manager, reportes
 
 # Por debajo de esta fracción del ancho de la imagen, la cara se considera muy lejana.
@@ -103,6 +104,8 @@ async def _respaldo_diario():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if auth.PIN_POR_DEFECTO:
+        print("[auth] AVISO: STAFF_PIN no está definido; se usa el PIN por defecto 1234. Cámbialo en config.local.bat.")
     db_manager.init_db()
     _reload_cache()
     await run_in_threadpool(cv_engine.warmup)
@@ -111,11 +114,13 @@ async def lifespan(app: FastAPI):
     tarea.cancel()
 
 
+STAFF = [Depends(auth.requerir_staff)]
+
 app = FastAPI(title="Asistencia Liga Infantil - Reconocimiento Facial", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -165,12 +170,25 @@ class ConfigIn(BaseModel):
     antispoofing: bool | None = None
 
 
-@app.get("/config")
+@app.post("/auth/login")
+def login(request: Request, pin: str = Form(...)):
+    token = auth.verificar_pin(pin, request)
+    return {"token": token, "expira_en": auth.TOKEN_TTL_S}
+
+
+@app.get("/kiosko/resumen")
+def kiosko_resumen():
+    """Dato público mínimo para la pantalla del kiosko (sin nombres de niños)."""
+    return {"llegadas_hoy": len(db_manager.get_asistencias(1000, solo_hoy=True))}
+
+
+
+@app.get("/config", dependencies=STAFF)
 def get_config():
     return {**cv_engine.config, "modelos": cv_engine.MODELOS, "detectores": cv_engine.DETECTORES}
 
 
-@app.put("/config")
+@app.put("/config", dependencies=STAFF)
 async def put_config(cfg: ConfigIn):
     try:
         nuevo = await run_in_threadpool(cv_engine.set_config, cfg.modelo, cfg.detector, cfg.umbral,
@@ -182,7 +200,7 @@ async def put_config(cfg: ConfigIn):
     return {**nuevo, "requieren_reinscripcion": len(_jugadores_cache) - len(_plantillas_actuales())}
 
 
-@app.post("/enroll")
+@app.post("/enroll", dependencies=STAFF)
 async def enroll(
     nombre: str = Form(...),
     file: UploadFile | None = File(None),
@@ -300,7 +318,7 @@ async def verify(file: UploadFile = File(...)):
     }
 
 
-@app.get("/pendientes")
+@app.get("/pendientes", dependencies=STAFF)
 def pendientes():
     """Llegadas no reconocidas, de la más reciente a la más antigua, con miniatura y sugerencia."""
     _purgar_pendientes()
@@ -317,7 +335,7 @@ def pendientes():
     return salida
 
 
-@app.post("/pendientes/{pendiente_id}/asignar")
+@app.post("/pendientes/{pendiente_id}/asignar", dependencies=STAFF)
 def asignar_pendiente(pendiente_id: int, jugador_id: int = Form(...)):
     """El staff indica quién era: se registra su asistencia y la foto se suma a sus plantillas."""
     d = _pendientes.pop(pendiente_id, None)
@@ -345,14 +363,14 @@ def asignar_pendiente(pendiente_id: int, jugador_id: int = Form(...)):
             "foto_guardada": foto_guardada, "motivo": motivo}
 
 
-@app.delete("/pendientes/{pendiente_id}")
+@app.delete("/pendientes/{pendiente_id}", dependencies=STAFF)
 def descartar_pendiente(pendiente_id: int):
     if _pendientes.pop(pendiente_id, None) is None:
         _error(404, "no_existe", "Esta llegada ya fue revisada o expiró.")
     return {"status": "success"}
 
 
-@app.post("/asistencia/manual")
+@app.post("/asistencia/manual", dependencies=STAFF)
 def asistencia_manual(jugador_id: int = Form(...)):
     """Respaldo para cuando el reconocimiento falla: el staff marca al niño a mano."""
     if jugador_id not in _jugadores_cache:
@@ -364,13 +382,13 @@ def asistencia_manual(jugador_id: int = Form(...)):
             "ya_registrado": registrado_a_las is not None}
 
 
-@app.get("/jugadores")
+@app.get("/jugadores", dependencies=STAFF)
 def jugadores():
     return [{**j, "compatible": j["fotos"] > 0}
             for j in db_manager.list_jugadores(cv_engine.config["modelo"])]
 
 
-@app.post("/jugadores/{jugador_id}/foto")
+@app.post("/jugadores/{jugador_id}/foto", dependencies=STAFF)
 async def agregar_foto(jugador_id: int, file: UploadFile = File(...)):
     """Agrega una foto nueva a un jugador (si no lo reconoce, o tras cambiar de modelo). Conserva el historial."""
     if jugador_id not in _jugadores_cache:
@@ -380,7 +398,7 @@ async def agregar_foto(jugador_id: int, file: UploadFile = File(...)):
     return {"status": "success", "nombre": _jugadores_cache[jugador_id]["nombre"]}
 
 
-@app.post("/jugadores/{jugador_id}/consentimiento")
+@app.post("/jugadores/{jugador_id}/consentimiento", dependencies=STAFF)
 def registrar_consentimiento(jugador_id: int, tutor: str = Form(...)):
     """Registra la autorización firmada para un jugador inscrito sin ella."""
     tutor = tutor.strip()
@@ -391,7 +409,7 @@ def registrar_consentimiento(jugador_id: int, tutor: str = Form(...)):
     return {"status": "success"}
 
 
-@app.delete("/jugadores/{jugador_id}")
+@app.delete("/jugadores/{jugador_id}", dependencies=STAFF)
 def borrar_jugador(jugador_id: int):
     if not db_manager.delete_jugador(jugador_id):
         _error(404, "no_existe", "El jugador no existe.")
@@ -406,13 +424,13 @@ def _fecha(valor: str, campo: str) -> str:
         _error(400, "fecha_invalida", f"{campo} debe tener formato AAAA-MM-DD.")
 
 
-@app.get("/jornadas")
+@app.get("/jornadas", dependencies=STAFF)
 def jornadas(desde: str, hasta: str):
     """Tipo de jornada de cada día marcado en el rango (los demás son entrenamiento)."""
     return db_manager.get_tipos_jornada(_fecha(desde, "desde"), _fecha(hasta, "hasta"))
 
 
-@app.put("/jornadas/{fecha}")
+@app.put("/jornadas/{fecha}", dependencies=STAFF)
 def marcar_jornada(fecha: str, tipo: str = Form(...)):
     try:
         db_manager.set_tipo_jornada(_fecha(fecha, "fecha"), tipo)
@@ -421,7 +439,7 @@ def marcar_jornada(fecha: str, tipo: str = Form(...)):
     return {"status": "success", "fecha": fecha, "tipo": tipo}
 
 
-@app.get("/reportes")
+@app.get("/reportes", dependencies=STAFF)
 def reporte(desde: str | None = None, hasta: str | None = None, tipo: str = "todos"):
     """Asistencia por jugador en el período (por defecto, los últimos 30 días)."""
     hasta = _fecha(hasta, "hasta") if hasta else date.today().isoformat()
@@ -439,7 +457,7 @@ def reporte(desde: str | None = None, hasta: str | None = None, tipo: str = "tod
     return {"desde": desde, "hasta": hasta, "tipo": tipo, **datos}
 
 
-@app.get("/asistencias")
+@app.get("/asistencias", dependencies=STAFF)
 def asistencias(limit: int = 50, hoy: bool = False, fecha: str | None = None):
     return db_manager.get_asistencias(limit, solo_hoy=hoy, fecha=fecha)
 
@@ -449,18 +467,18 @@ def asistencias(limit: int = 50, hoy: bool = False, fecha: str | None = None):
 _NOMBRE_RESPALDO = re.compile(r"^asistencia_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6,9}_[a-z]+\.db$")
 
 
-@app.get("/respaldos")
+@app.get("/respaldos", dependencies=STAFF)
 def respaldos():
     return db_manager.listar_respaldos()
 
 
-@app.post("/respaldos")
+@app.post("/respaldos", dependencies=STAFF)
 async def crear_respaldo():
     ruta = await run_in_threadpool(db_manager.crear_respaldo, "manual")
     return {"status": "success", "nombre": ruta.name}
 
 
-@app.get("/respaldos/{nombre}")
+@app.get("/respaldos/{nombre}", dependencies=STAFF)
 def descargar_respaldo(nombre: str):
     # Solo nombres generados por el sistema: evita leer archivos fuera de la carpeta de respaldos.
     ruta = db_manager.RESPALDOS_DIR / nombre

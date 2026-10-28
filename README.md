@@ -50,6 +50,7 @@ streamlit run ui/app.py
 cd web && npm install && npm run build && npm start
 ```
 
+**Seguridad:** el staff entra con el PIN (`POST /auth/login`) y recibe un token firmado con vencimiento; todos los endpoints salvo `/health`, `/verify` y `/kiosko/resumen` lo exigen. Tras 5 PIN incorrectos seguidos se bloquea el acceso 5 minutos.  
 **PIN del staff:** copia `config.local.example.bat` como `config.local.bat` y cambia `STAFF_PIN`.
 `iniciar.bat` lo carga solo y el archivo no se sube a git.
 
@@ -140,6 +141,9 @@ valores por defecto < variables de entorno < `data/config.json`.
 | `FACE_DETECTOR`   | `opencv`                | Detector de caras                                  |
 | `API_URL`         | `http://127.0.0.1:8000` | URL de la API usada por Streamlit                  |
 | `STAFF_PIN`       | `1234`                  | PIN del panel del staff                            |
+| `AUTH_SECRET`     | aleatoria por arranque  | Clave que firma las sesiones del staff             |
+| `AUTH_TTL_HORAS`  | `12`                    | Duración de la sesión del staff                    |
+| `CORS_ORIGINS`    | `http://localhost:3000` | Orígenes web permitidos (separados por coma)       |
 | `REQUIRE_CONSENT` | `1`                     | Exigir autorización del tutor para inscribir       |
 | `DB_PATH`         | `data/asistencia.db`    | Base de datos a usar (sus respaldos van a su lado) |
 

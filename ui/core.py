@@ -36,6 +36,9 @@ _AVATAR_COLORES = ["#4B1F5C", "#7C3AED", "#B45309", "#BE185D", "#0E7490", "#6D28
 
 def call_api(method: str, endpoint: str, **kwargs):
     """Retorna (ok, data). En error, data es {'codigo', 'mensaje', ...}."""
+    token = st.session_state.get("staff_token")
+    if token:
+        kwargs["headers"] = {**kwargs.get("headers", {}), "Authorization": f"Bearer {token}"}
     try:
         resp = requests.request(method, f"{API_URL}{endpoint}", timeout=TIMEOUT, **kwargs)
     except requests.RequestException:
@@ -46,6 +49,9 @@ def call_api(method: str, endpoint: str, **kwargs):
         data = {}
     if resp.ok:
         return True, data
+    if resp.status_code == 401 and token:  # sesión vencida: vuelve a pedir el PIN
+        st.session_state.staff_ok = False
+        st.session_state.staff_token = None
     detail = data.get("detail", {}) if isinstance(data, dict) else {}
     if not isinstance(detail, dict):
         detail = {"codigo": "error", "mensaje": str(detail)}
@@ -72,6 +78,7 @@ def image_file(image):
 def init_state() -> None:
     ss = st.session_state
     ss.setdefault("staff_ok", False)
+    ss.setdefault("staff_token", None)
     # Ajustes persistentes entre páginas (el estado de un widget se borra al cambiar de página).
     ss.setdefault("cfg_camara", True)
     ss.setdefault("cfg_prueba", False)
@@ -608,6 +615,7 @@ def header(titulo: str, subtitulo: str = "", mostrar_estado: bool = True) -> Non
             if st.session_state.staff_ok and st.button("Cerrar sesión staff", icon=":material/logout:",
                                                        width="stretch"):
                 st.session_state.staff_ok = False
+                st.session_state.staff_token = None
                 st.rerun()
 
 
@@ -627,10 +635,17 @@ def login_form() -> bool:
             pin = st.text_input("PIN", type="password", placeholder="Ingresa el PIN del staff")
             entrar = st.form_submit_button("Entrar", type="primary", width="stretch")
         if entrar:
-            if pin == STAFF_PIN:
+            try:
+                resp = requests.post(f"{API_URL}/auth/login", data={"pin": pin}, timeout=TIMEOUT)
+            except requests.RequestException:
+                st.error("No se pudo conectar con el servidor.")
+                return False
+            if resp.ok:
+                st.session_state.staff_token = resp.json()["token"]
                 st.session_state.staff_ok = True
                 return True
-            st.error("PIN incorrecto. Inténtalo de nuevo.")
+            detalle = resp.json().get("detail", {}) if resp.headers.get("content-type", "").startswith("application/json") else {}
+            st.error(detalle.get("mensaje", "PIN incorrecto. Inténtalo de nuevo."))
     return False
 
 

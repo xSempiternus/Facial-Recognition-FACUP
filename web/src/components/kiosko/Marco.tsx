@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, type RefObject } from "react";
 import { useCalidad } from "./calidad";
-import { copiarRastro, crearRastro, cubrir, PUNTOS_REF, type Rastro } from "./rastro";
+import { copiarRastro, crearRastro, cubrir, type Rastro } from "./rastro";
 import { k } from "./tiempo";
 
 export type ModoMarco = "busca" | "quieto" | "verifica" | "exito" | "ya" | "aviso" | "error";
@@ -65,19 +65,15 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
     if (!cv || !ctx) return;
     const T = k();
     const reducir = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const N = PUNTOS_REF.length;
 
     const congelado = crearRastro();
     let hayCongelado = false;
     let modoPrev: ModoMarco = datos.current.modo;
     let t0Modo = performance.now();
     let hayPrev = false;
-    let t0Cara = 0;
-    let verPuntos = 0;
     let cierre = 0;
     const color: [Rgb, Rgb] = [[255, 255, 255], [255, 255, 255]];
     const caja = { x: 0, y: 0, w: 0, h: 0, listo: false };
-    const P = new Float32Array(N * 2);
     let ultimo = performance.now();
     let raf = 0;
 
@@ -112,7 +108,6 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
       const hay = R.hay && (R.fija || hayCongelado || ahora - R.t < 500);
       const aparece = hay && !hayPrev;
       if (aparece) {
-        t0Cara = ahora;
         caja.listo = false; // al aparecer una cara, el marco salta a ella sin viajar desde el óvalo
       }
       hayPrev = hay;
@@ -204,39 +199,6 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
       trazar();
       ctx!.stroke();
       ctx!.shadowBlur = 0;
-
-      // Puntitos de referencia sobre la cara (solo calidad alto/medio, solo con cara).
-      verPuntos = lerp(verPuntos, hay ? 1 : 0, suave(10, dt));
-      if (cal !== "bajo" && verPuntos > 0.01) {
-        const kp = suave(reducir ? 80 : 26, dt);
-        const radio = lim(bh * 0.0095, 2.2, 3.8);
-        const claro: Rgb = [lerp(255, color[0][0], 0.22), lerp(255, color[0][1], 0.22), lerp(255, color[0][2], 0.22)];
-        for (let i = 0; i < N; i++) {
-          const px = mapX(R.pts[i * 2]) + temblor, py = mapY(R.pts[i * 2 + 1]);
-          if (aparece) {
-            P[i * 2] = px;
-            P[i * 2 + 1] = py;
-          }
-          P[i * 2] = lerp(P[i * 2], px, kp);
-          P[i * 2 + 1] = lerp(P[i * 2 + 1], py, kp);
-          const ap = reducir ? 1 : lim((ahora - t0Cara) / 1000 - i * 0.028, 0, 0.22) / 0.22; // aparecen en cascada
-          const al = ap * verPuntos;
-          if (al <= 0.01) continue;
-          const rr = radio * (0.6 + 0.4 * ap);
-          ctx!.globalAlpha = al * 0.3;
-          ctx!.fillStyle = "#001208"; // contorno tenue para que el punto se lea sobre piel clara
-          ctx!.beginPath();
-          ctx!.arc(P[i * 2], P[i * 2 + 1], rr + 1.2, 0, Math.PI * 2);
-          ctx!.fill();
-          ctx!.globalAlpha = al;
-          ctx!.fillStyle = rgb(claro);
-          ctx!.beginPath();
-          ctx!.arc(P[i * 2], P[i * 2 + 1], rr, 0, Math.PI * 2);
-          ctx!.fill();
-        }
-        ctx!.globalAlpha = 1;
-        ctx!.shadowBlur = 0;
-      }
 
       // Éxito: onda de luz desde la cara y pocas chispas (alto/medio). "Ya registrado": una sola onda tenue.
       if ((m === "exito" || m === "ya") && !reducir) {

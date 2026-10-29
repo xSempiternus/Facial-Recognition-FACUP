@@ -26,6 +26,8 @@ TOLERANCIA_INSCRIPCION = 0.10
 # Una corrección del staff solo se guarda como foto del jugador si se parece al menos
 # (umbral - MARGEN_CORRECCION) a sus fotos actuales: protege contra asignaciones equivocadas.
 MARGEN_CORRECCION = 0.25
+# El resultado del camino rápido de retinaface solo se acepta si supera el umbral por al menos este margen.
+MARGEN_VERIFICACION_RAPIDA = 0.05
 # Llegadas no reconocidas que esperan revisión del staff: solo en memoria, se borran solas.
 PENDIENTES_TTL_S = 2 * 3600
 MAX_PENDIENTES = 50
@@ -128,7 +130,8 @@ app.add_middleware(
 
 
 async def _analyze(file: UploadFile, miniatura: bool = False, n_foto: int | None = None,
-                   antispoofing: bool = False) -> dict:
+                   antispoofing: bool = False, rapido: bool = False) -> dict:
+    await file.seek(0)
     image_bytes = await file.read()
     cual = f" en la foto {n_foto}" if n_foto else ""
     extra = {"foto": n_foto} if n_foto else {}
@@ -136,7 +139,7 @@ async def _analyze(file: UploadFile, miniatura: bool = False, n_foto: int | None
         _error(400, "imagen_vacia", f"La imagen está vacía{cual}.", **extra)
     try:
         # DeepFace es bloqueante (CPU); se ejecuta fuera del event loop.
-        return await run_in_threadpool(cv_engine.analyze_face, image_bytes, miniatura, antispoofing)
+        return await run_in_threadpool(cv_engine.analyze_face, image_bytes, miniatura, antispoofing, rapido)
     except cv_engine.SpoofError:
         _error(422, "foto_falsa", "La cara parece una foto o una pantalla, no una persona.")
     except cv_engine.FaceNotFoundError:
@@ -285,8 +288,14 @@ async def verify(file: UploadFile = File(...)):
     if not plantillas:
         _error(404, "sin_jugadores", "No hay jugadores inscritos todavía.")
 
-    face = await _analyze(file, miniatura=True, antispoofing=cv_engine.config.get("antispoofing", False))
+    antispoofing = cv_engine.config.get("antispoofing", False)
+    # Camino rápido: solo se acepta si el parecido es claramente alto; si no, se confirma con el de referencia.
+    face = await _analyze(file, miniatura=True, antispoofing=antispoofing, rapido=True)
     jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=_threshold())
+    if cv_engine.config["detector"] == "retinaface" and not antispoofing and (
+            jugador_id is None or score < _threshold() + MARGEN_VERIFICACION_RAPIDA):
+        face = await _analyze(file, miniatura=True, antispoofing=antispoofing)
+        jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=_threshold())
 
     if jugador_id is None:
         # Queda para que el staff indique quién era (y esa foto mejore el reconocimiento).

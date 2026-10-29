@@ -24,3 +24,14 @@ export function hablar(texto: string) {
   if (s.getVoices().length) decir();
   else s.addEventListener("voiceschanged", decir, { once: true });
 }
+
+/** iOS/Safari solo permite hablar tras un gesto del usuario: el primer toque desbloquea la síntesis con un enunciado vacío. */
+export function desbloquearVoz() {
+  const s = typeof window !== "undefined" ? window.speechSynthesis : undefined;
+  if (!s) return;
+  try {
+    const u = new SpeechSynthesisUtterance("");
+    u.volume = 0;
+    s.speak(u);
+  } catch {}
+}

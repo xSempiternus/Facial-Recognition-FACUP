@@ -27,7 +27,7 @@ export default function Resumen() {
   return (
     <>
       <PageHeader titulo="Resumen" descripcion="Cómo va la jornada de hoy." />
-      <div className="s-grid c3">
+      <div className="s-grid c3 kpi">
         <Link href="/staff/asistencia" className="s-card s-stat">
           <div className="k">Llegadas hoy</div>
           <div className="v">{data ? llegadas : <Skeleton w={50} h={30} />}</div>

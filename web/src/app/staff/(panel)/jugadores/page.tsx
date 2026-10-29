@@ -147,7 +147,7 @@ export default function Jugadores() {
           <Vacio icono={<Search size={18} />} titulo="Sin coincidencias" texto="Ningún jugador coincide con la búsqueda." />
         ) : (
           <div className="s-table-wrap">
-            <table className="s-table">
+            <table className="s-table cards">
               <caption className="sr-only">{filtrados.length} de {data.length} jugadores</caption>
               <thead>
                 <tr>

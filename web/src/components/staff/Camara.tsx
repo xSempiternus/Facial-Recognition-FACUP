@@ -1,23 +1,47 @@
 "use client";
 
 import { Camera as CamIcon, CameraOff, ImageUp } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "./ui";
 
+const sinSuscripcion = () => () => {};
+/** Solo en desarrollo: ?demo=camara simula el visor (sin cámara real) para revisar el layout. */
+function useDemo() {
+  return useSyncExternalStore(
+    sinSuscripcion,
+    () => process.env.NODE_ENV !== "production" && new URLSearchParams(window.location.search).get("demo") === "camara",
+    () => false,
+  );
+}
+
 /** Cámara del navegador (frontal). `onCaptura` recibe un JPEG; si no hay cámara, deja elegir un archivo. */
-export function Camara({ onCaptura, etiqueta = "Tomar foto", deshabilitado }: { onCaptura: (b: Blob) => void; etiqueta?: string; deshabilitado?: boolean }) {
+export function Camara({
+  onCaptura,
+  etiqueta = "Tomar foto",
+  deshabilitado,
+  fija,
+}: {
+  onCaptura: (b: Blob) => void;
+  etiqueta?: string;
+  deshabilitado?: boolean;
+  /** En pantallas chicas, deja la barra del botón de captura fija abajo (con safe-area). */
+  fija?: boolean;
+}) {
+  const demo = useDemo();
   const video = useRef<HTMLVideoElement>(null);
   const archivo = useRef<HTMLInputElement>(null);
-  const [estado, setEstado] = useState<"iniciando" | "lista" | "error">("iniciando");
+  const [estadoReal, setEstado] = useState<"iniciando" | "lista" | "error">("iniciando");
+  const estado = demo ? "lista" : estadoReal;
 
   useEffect(() => {
+    if (demo) return;
     let flujo: MediaStream | null = null;
     let vivo = true;
     (async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) throw new Error("sin_api");
         flujo = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 960 } },
+          video: { facingMode: "user", width: { ideal: 1280 } },
           audio: false,
         });
         if (!vivo) {
@@ -37,9 +61,25 @@ export function Camara({ onCaptura, etiqueta = "Tomar foto", deshabilitado }: { 
       vivo = false;
       flujo?.getTracks().forEach((t) => t.stop());
     };
-  }, []);
+  }, [demo]);
 
   function capturar() {
+    if (demo) {
+      const c = document.createElement("canvas");
+      c.width = 480;
+      c.height = 640;
+      const g = c.getContext("2d");
+      if (g) {
+        g.fillStyle = `hsl(${Math.round(Math.random() * 360)} 35% 35%)`;
+        g.fillRect(0, 0, 480, 640);
+        g.fillStyle = "rgb(255 255 255 / 0.4)";
+        g.beginPath();
+        g.ellipse(240, 300, 130, 170, 0, 0, Math.PI * 2);
+        g.fill();
+      }
+      c.toBlob((b) => b && onCaptura(b), "image/jpeg", 0.8);
+      return;
+    }
     const v = video.current;
     if (!v || !v.videoWidth) return;
     const c = document.createElement("canvas");
@@ -50,10 +90,11 @@ export function Camara({ onCaptura, etiqueta = "Tomar foto", deshabilitado }: { 
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <div className={fija ? "s-camwrap fija" : "s-camwrap"}>
       <div className="s-cam">
         <video ref={video} playsInline muted aria-label="Vista de la cámara" style={{ display: estado === "lista" ? "block" : "none" }} />
         {estado === "lista" && <div className="guide" aria-hidden />}
+        {demo && <div className="msg demo" aria-hidden>Vista simulada (demo)</div>}
         {estado === "iniciando" && <div className="msg">Encendiendo la cámara…</div>}
         {estado === "error" && (
           <div className="msg">
@@ -62,11 +103,11 @@ export function Camara({ onCaptura, etiqueta = "Tomar foto", deshabilitado }: { 
           </div>
         )}
       </div>
-      <div className="s-actions">
-        <Button variante="brand" onClick={capturar} disabled={estado !== "lista" || deshabilitado} style={{ flex: 1 }}>
+      <div className="s-actions s-camactions">
+        <Button variante="brand" className="s-capture" onClick={capturar} disabled={estado !== "lista" || deshabilitado} style={{ flex: 1 }}>
           <CamIcon size={16} aria-hidden /> {etiqueta}
         </Button>
-        <Button onClick={() => archivo.current?.click()} disabled={deshabilitado}>
+        <Button className="s-upload" onClick={() => archivo.current?.click()} disabled={deshabilitado}>
           <ImageUp size={16} aria-hidden /> Subir foto
         </Button>
         <input

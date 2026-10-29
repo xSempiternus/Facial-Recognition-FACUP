@@ -8,8 +8,9 @@
 import { AnimatePresence, motion, MotionConfig, useMotionValue } from "motion/react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { hablar } from "@/lib/voz";
-import { llegadasDeHoy, verificar, type Verificacion } from "@/lib/api";
+import { desbloquearVoz, hablar } from "@/lib/voz";
+import { llegadasDeHoy, precalentar, verificar, type Verificacion } from "@/lib/api";
+import { calidadActual, iniciarCalidad, restriccionesCamara, useCalidad } from "./calidad";
 import type { EstadoEscaner } from "./Escaner";
 import FondoVivo from "./FondoVivo";
 import Inicio from "./Inicio";
@@ -136,6 +137,8 @@ const DEMO_VERIFICACION: Record<string, Verificacion> = {
 
 export default function Kiosko() {
   const demo = useDemo();
+  const calidad = useCalidad();
+  const alta = calidad === "alto";
   const video = useRef<HTMLVideoElement>(null);
   const progreso = useMotionValue(0);
 
@@ -162,16 +165,52 @@ export default function Kiosko() {
     prueba.current = q.get("prueba") === "1";
   }, []);
 
-  // Cámara.
+  // Nivel de calidad del dispositivo, conexión en caliente y voz desbloqueada por el primer toque (iOS lo exige).
+  useEffect(() => {
+    iniciarCalidad();
+    precalentar();
+    window.addEventListener("pointerdown", desbloquearVoz, { once: true });
+    return () => window.removeEventListener("pointerdown", desbloquearVoz);
+  }, []);
+
+  // Pantalla siempre encendida (kiosko). Se pierde al ocultar la pestaña: se vuelve a pedir al volver.
+  useEffect(() => {
+    let lock: WakeLockSentinel | null = null;
+    let vivo = true;
+    const pedir = async () => {
+      try {
+        if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+        const l = await navigator.wakeLock.request("screen");
+        if (vivo) lock = l;
+        else l.release().catch(() => {});
+      } catch {}
+    };
+    pedir();
+    const alVolver = () => document.visibilityState === "visible" && pedir();
+    document.addEventListener("visibilitychange", alVolver);
+    return () => {
+      vivo = false;
+      document.removeEventListener("visibilitychange", alVolver);
+      lock?.release().catch(() => {});
+    };
+  }, []);
+
+  // Cámara: resolución ideal según el dispositivo (sin forzar), y se reabre si el sistema la corta (iOS al ocultar la app).
   useEffect(() => {
     let stream: MediaStream | null = null;
     let cancelado = false;
     (async () => {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Este navegador no tiene acceso a la cámara.");
-      const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
+      const pedir = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      let s: MediaStream;
+      try {
+        s = await pedir(restriccionesCamara(calidadActual()));
+      } catch (e) {
+        // Una cámara que no cumple lo "ideal" no debería fallar, pero algunas la rechazan: se reintenta sin medidas.
+        if (e instanceof DOMException && (e.name === "OverconstrainedError" || e.name === "ConstraintNotSatisfiedError")) {
+          s = await pedir({ video: { facingMode: "user" }, audio: false });
+        } else throw e;
+      }
       if (cancelado) return s.getTracks().forEach((t) => t.stop());
       stream = s;
       setErrorCamara(null);
@@ -180,8 +219,15 @@ export default function Kiosko() {
         video.current.play().catch(() => {});
       }
     })().catch((e) => setErrorCamara(mensajeErrorCamara(e)));
+    const alVolver = () => {
+      if (document.visibilityState !== "visible" || !stream) return;
+      if (stream.getVideoTracks().some((t) => t.readyState === "ended")) setIntento((n) => n + 1);
+      else video.current?.play().catch(() => {});
+    };
+    document.addEventListener("visibilitychange", alVolver);
     return () => {
       cancelado = true;
+      document.removeEventListener("visibilitychange", alVolver);
       stream?.getTracks().forEach((t) => t.stop());
     };
   }, [intento]);
@@ -211,9 +257,16 @@ export default function Kiosko() {
     return () => clearInterval(id);
   }, []);
 
+  // Verificación: feedback inmediato (fase "enviando" apenas se decide la foto), petición cancelable.
+  const pendiente = useRef<AbortController | null>(null);
+  useEffect(() => () => pendiente.current?.abort(), []);
+  const alCapturando = useCallback(() => setFase("enviando"), []);
+  const alFallarCaptura = useCallback(() => setFase("escaneando"), []);
   const alCapturar = useCallback(async (foto: Blob) => {
-    setFase("enviando");
-    const v = await verificar(foto);
+    pendiente.current?.abort();
+    const ctl = (pendiente.current = new AbortController());
+    const v = await verificar(foto, ctl.signal);
+    if (pendiente.current !== ctl) return; // cancelada o reemplazada
     const { resultado, frase } = aResultado(v);
     if (v.ok && !v.yaRegistrado) setHoy((n) => (n === null ? n : n + 1));
     setResultado(resultado);
@@ -234,6 +287,9 @@ export default function Kiosko() {
     activo: faseReal === "escaneando" && !esperarSalida,
     intento,
     onCaptura: alCapturar,
+    onCapturando: alCapturando,
+    onCapturaFallida: alFallarCaptura,
+    mantenerAnillo: faseReal === "enviando",
     seguimiento,
   });
 
@@ -334,7 +390,7 @@ export default function Kiosko() {
   return (
     <MotionConfig reducedMotion="user">
       <main
-        className="relative h-dvh w-screen overflow-hidden bg-fondo"
+        className="relative h-dvh w-full overflow-hidden bg-fondo"
         onClick={() => resultadoVisible && prueba.current && terminarResultado()}
       >
         {/* Fondo vivo: fotos 3D de FA CUP, nítidas en el inicio y desenfocadas tras el cristal al escanear */}
@@ -348,25 +404,23 @@ export default function Kiosko() {
           animate={mostrarInicio ? { opacity: 0, scale: 0.86 } : { opacity: 1, scale: 1 }}
           transition={mostrarInicio ? { duration: 0.5, ease: EASE } : { type: "spring", stiffness: 140, damping: 22 }}
         >
-          {/* Cámara: solo dentro del círculo, en espejo. Se oscurece al mostrar un resultado. */}
-          <motion.video
+          {/* Cámara: solo dentro del círculo (clip-path, más barato que una máscara sobre video en vivo), en espejo. */}
+          <video
             ref={video}
             autoPlay
             muted
             playsInline
+            disablePictureInPicture
             className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
-            style={{
-              WebkitMaskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
-              maskImage: `radial-gradient(circle ${r}px at ${cx}px ${cy}px, #000 99.5%, transparent 100%)`,
-            }}
-            animate={{
-              filter: exito
-                ? "brightness(0.9) saturate(1) blur(0px)"
-                : resultadoVisible
-                  ? "brightness(0.32) saturate(0.6) blur(6px)"
-                  : "brightness(1) saturate(0.95) blur(0px)",
-            }}
-            transition={{ duration: 0.5, ease: EASE }}
+            style={{ clipPath: `circle(${r}px at ${cx}px ${cy}px)` }}
+          />
+          {/* Al mostrar un resultado, la cámara se apaga con una capa negra (solo opacidad: sin filtros sobre el video) */}
+          <motion.div
+            className="pointer-events-none absolute rounded-full bg-black"
+            style={{ left: cx - r, top: cy - r, width: r * 2, height: r * 2 }}
+            initial={false}
+            animate={{ opacity: exito ? 0.12 : resultadoVisible ? 0.72 : 0 }}
+            transition={{ duration: 0.4, ease: EASE }}
           />
           <Lente objetivo={circulo} banda={banda} progreso={progreso} estado={estado} />
         </motion.div>
@@ -377,7 +431,7 @@ export default function Kiosko() {
         </AnimatePresence>
 
         {/* Barra superior: logo y llegadas del día, discretos */}
-        <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-4 px-[max(1rem,4vw)] pt-[max(1rem,3.5vh)]">
+        <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-4 pl-[max(1rem,4vw,env(safe-area-inset-left))] pr-[max(1rem,4vw,env(safe-area-inset-right))] pt-[max(1rem,3.5vh,env(safe-area-inset-top))]">
           <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(30px,4.4vh,44px)] w-auto drop-shadow-[0_2px_8px_rgba(0,0,0,.45)]" />
           {hoy !== null && (
             <motion.p
@@ -413,7 +467,7 @@ export default function Kiosko() {
               transition={{ type: "spring", stiffness: 160, damping: 24 }}
             >
               <motion.div
-                layout
+                layout={alta}
                 className="cristal w-full max-w-[660px] rounded-[34px] px-7 py-6 text-center sm:px-12 sm:py-7"
                 data-tono={resultadoVisible ? resultado?.tono : sinCamara ? "error" : undefined}
                 transition={{ layout: { type: "spring", stiffness: 260, damping: 30 } }}
@@ -421,10 +475,10 @@ export default function Kiosko() {
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.div
                     key={texto.titulo + texto.sub}
-                    initial={{ opacity: 0, y: 8, filter: "blur(4px)" }}
-                    animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                    exit={{ opacity: 0, y: -6, filter: "blur(4px)" }}
-                    transition={{ duration: 0.28, ease: EASE }}
+                    initial={alta ? { opacity: 0, y: 8, filter: "blur(4px)" } : { opacity: 0, y: 6 }}
+                    animate={alta ? { opacity: 1, y: 0, filter: "blur(0px)" } : { opacity: 1, y: 0 }}
+                    exit={alta ? { opacity: 0, y: -6, filter: "blur(4px)" } : { opacity: 0, y: -4 }}
+                    transition={{ duration: 0.18, ease: EASE }}
                   >
                     <h1
                       className={`font-semibold tracking-[-0.025em] text-texto ${

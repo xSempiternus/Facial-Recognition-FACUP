@@ -4,16 +4,21 @@
 // Cada cuadro decide la "postura" (lejos, cerca, descentrado, quieto) y llena el anillo del círculo central
 // mientras el niño se queda quieto. Al completarse, saca la foto sola.
 
-import { FaceLandmarker, FilesetResolver, type NormalizedLandmark } from "@mediapipe/tasks-vision";
+import type { FaceLandmarker, NormalizedLandmark } from "@mediapipe/tasks-vision";
 import type { MotionValue } from "motion/react";
 import type { Seguimiento } from "./Foto3D";
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { calidadActual, type Calidad } from "./calidad";
 
 export type Postura = "sin-cara" | "lejos" | "cerca" | "descentrado" | "quieto";
 export type Objetivo = { cx: number; cy: number; r: number }; // círculo central, en px de pantalla
 
 const MANTENER_MS = 900; // tiempo quieto en el círculo para sacar la foto
 const PERDER_MS = 350; // si se mueve, el anillo se vacía en este tiempo
+const LADO_MAX_FOTO = 720; // la foto que sube al servidor: lado largo máximo (px)
+const CALIDAD_JPEG = 0.85;
+// Intervalo mínimo entre análisis (ms). Con alguien frente a la cámara se analiza más seguido; sin nadie, la mitad.
+const INTERVALO_MS: Record<Calidad, number> = { alto: 33, medio: 50, bajo: 80 };
 
 type Opciones = {
   video: RefObject<HTMLVideoElement | null>;
@@ -22,6 +27,12 @@ type Opciones = {
   activo: boolean;
   intento: number;
   onCaptura: (foto: Blob) => void;
+  /** Se llama en el acto de decidir la foto (antes de procesarla): permite mostrar "verificando" sin esperas. */
+  onCapturando?: () => void;
+  /** La foto no se pudo leer de la cámara: el rastreo sigue intentando. */
+  onCapturaFallida?: () => void;
+  /** Conserva el anillo lleno aunque `activo` sea falso (mientras se verifica). */
+  mantenerAnillo?: boolean;
   /** Posición de la cara en pantalla (-1..1 desde el centro) para efectos que la siguen, como la foto 3D. */
   seguimiento?: Seguimiento;
 };
@@ -30,7 +41,9 @@ const URL_MODELO_REMOTO =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const RUTAS_MODELO = ["/models/face_landmarker.task", "/modelos/face-landmarker.task", URL_MODELO_REMOTO];
 
-export function useRastreoCara({ video, objetivo, progreso, activo, intento, onCaptura, seguimiento }: Opciones) {
+export function useRastreoCara({
+  video, objetivo, progreso, activo, intento, onCaptura, onCapturando, onCapturaFallida, mantenerAnillo = false, seguimiento,
+}: Opciones) {
   const [listo, setListo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [postura, setPostura] = useState<Postura>("sin-cara");
@@ -45,20 +58,22 @@ export function useRastreoCara({ video, objetivo, progreso, activo, intento, onC
 
   const detector = useRef<FaceLandmarker | null>(null);
   const activoRef = useRef(activo);
-  const capturaRef = useRef(onCaptura);
+  const capturaRef = useRef({ onCaptura, onCapturando, onCapturaFallida });
   useEffect(() => {
     activoRef.current = activo;
-    if (!activo) progreso.set(0);
-  }, [activo, progreso]);
+    if (!activo && !mantenerAnillo) progreso.set(0);
+  }, [activo, mantenerAnillo, progreso]);
   useEffect(() => {
-    capturaRef.current = onCaptura;
-  }, [onCaptura]);
+    capturaRef.current = { onCaptura, onCapturando, onCapturaFallida };
+  }, [onCaptura, onCapturando, onCapturaFallida]);
 
   // Carga del modelo (wasm y modelo servidos desde /public: funciona sin internet).
   useEffect(() => {
     let cancelado = false;
     (async () => {
       try {
+        // Carga perezosa: la librería (y su wasm) no pesan en el primer pintado del kiosko.
+        const { FaceLandmarker, FilesetResolver } = await import("@mediapipe/tasks-vision");
         const archivos = await FilesetResolver.forVisionTasks("/mediapipe");
         const crear = (modelAssetPath: string, delegate: "GPU" | "CPU") =>
           FaceLandmarker.createFromOptions(archivos, {
@@ -91,27 +106,41 @@ export function useRastreoCara({ video, objetivo, progreso, activo, intento, onC
     };
   }, [intento]);
 
-  // Bucle por cuadro.
+  // Bucle de análisis: se engancha a los cuadros reales del video (requestVideoFrameCallback; rAF de respaldo),
+  // limita la frecuencia según el dispositivo, se pausa con la pestaña oculta y no toca React salvo al cambiar
+  // de postura. El anillo y el seguimiento van por MotionValues (sin re-render por cuadro).
   useEffect(() => {
     if (!listo) return;
-    let raf = 0;
+    const v0 = video.current;
+    if (!v0) return;
+    const conRVFC = "requestVideoFrameCallback" in v0;
+    let idCb = 0;
+    let parado = false;
     let ultimoTiempoVideo = -1;
-    let ultimoMs = performance.now();
+    let ultimoAnalisis = 0;
     let centroPrevio: { x: number; y: number } | null = null;
     let posturaActual: Postura = "sin-cara";
+    let hayCara = false;
     let capturando = false;
 
-    const cuadro = () => {
-      raf = requestAnimationFrame(cuadro);
+    const programar = () => {
+      if (parado) return;
+      idCb = conRVFC ? v0.requestVideoFrameCallback(cuadro) : requestAnimationFrame(cuadro);
+    };
+
+    function cuadro() {
+      programar();
       const v = video.current;
       const fl = detector.current;
-      if (!v || !fl || v.readyState < 2 || !v.videoWidth) return;
+      if (!v || !fl || v.readyState < 2 || !v.videoWidth || document.hidden) return;
 
       const ahora = performance.now();
-      const dt = Math.min(ahora - ultimoMs, 100);
-      ultimoMs = ahora;
+      const intervalo = INTERVALO_MS[calidadActual()] * (hayCara && activoRef.current ? 1 : 2);
+      if (ahora - ultimoAnalisis < intervalo - 2) return;
       if (v.currentTime === ultimoTiempoVideo) return;
       ultimoTiempoVideo = v.currentTime;
+      const dt = ultimoAnalisis ? Math.min(ahora - ultimoAnalisis, 150) : 33;
+      ultimoAnalisis = ahora;
 
       // El video cubre la pantalla (object-fit: cover), así que se mide en px de pantalla.
       const W = window.innerWidth;
@@ -119,6 +148,7 @@ export function useRastreoCara({ video, objetivo, progreso, activo, intento, onC
 
       const resultado = fl.detectForVideo(v, ahora);
       const puntos = resultado.faceLandmarks[0];
+      hayCara = Boolean(puntos);
 
       // Del espacio del video (object-fit: cover, en espejo) al de la pantalla.
       const escala = Math.max(W / v.videoWidth, H / v.videoHeight);
@@ -132,9 +162,9 @@ export function useRastreoCara({ video, objetivo, progreso, activo, intento, onC
       let nueva: Postura = "sin-cara";
       let estable = false;
       if (puntos) {
-        const pts = puntos.map(aPantalla);
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        for (const p of pts) {
+        for (const lm of puntos) {
+          const p = aPantalla(lm);
           if (p.x < minX) minX = p.x;
           if (p.x > maxX) maxX = p.x;
           if (p.y < minY) minY = p.y;
@@ -150,13 +180,13 @@ export function useRastreoCara({ video, objetivo, progreso, activo, intento, onC
         else if (distancia > r * 0.38) nueva = "descentrado";
         else nueva = "quieto";
 
+        // Umbral de movimiento por cuadro de ~33 ms: si se analiza menos seguido, se permite más desplazamiento.
         const movimiento = centroPrevio ? Math.hypot(centro.x - centroPrevio.x, centro.y - centroPrevio.y) : 0;
-        estable = movimiento < r * 0.045;
+        estable = movimiento < r * 0.045 * Math.max(1, dt / 33);
         centroPrevio = centro;
         seguimiento?.x.set((centro.x / W - 0.5) * 2);
         seguimiento?.y.set((centro.y / H - 0.5) * 2);
         seguimiento?.presente.set(1);
-
       } else {
         centroPrevio = null;
         seguimiento?.presente.set(0);
@@ -178,25 +208,39 @@ export function useRastreoCara({ video, objetivo, progreso, activo, intento, onC
         // Sin esto, en los cuadros previos al re-render el anillo sigue lleno y dispara una segunda captura.
         capturando = true;
         activoRef.current = false;
+        capturaRef.current.onCapturando?.(); // feedback inmediato: "Verificando…" antes de procesar la foto
         capturar(v).then((foto) => {
           capturando = false;
-          if (foto) capturaRef.current(foto);
-          else activoRef.current = true; // no se pudo leer la cámara: seguir intentando
+          if (foto) capturaRef.current.onCaptura(foto);
+          else {
+            activoRef.current = true; // no se pudo leer la cámara: seguir intentando
+            capturaRef.current.onCapturaFallida?.();
+          }
         });
       }
+    }
+    programar();
+    return () => {
+      parado = true;
+      if (conRVFC) v0.cancelVideoFrameCallback(idCb);
+      else cancelAnimationFrame(idCb);
     };
-    raf = requestAnimationFrame(cuadro);
-    return () => cancelAnimationFrame(raf);
   }, [listo, video, objetivo, progreso, seguimiento]);
 
   return { listo, error, postura };
 }
 
-/** Cuadro actual de la cámara como JPEG, sin espejo (como lo vería cualquier otra cámara). */
+// Un solo canvas reutilizado entre capturas (evita reservar memoria de imagen cada vez).
+let lienzo: HTMLCanvasElement | null = null;
+
+/** Cuadro actual de la cámara como JPEG ≤720 px de lado largo, sin espejo (como lo vería cualquier otra cámara). */
 function capturar(v: HTMLVideoElement): Promise<Blob | null> {
-  const c = document.createElement("canvas");
-  c.width = v.videoWidth;
-  c.height = v.videoHeight;
-  c.getContext("2d")?.drawImage(v, 0, 0);
-  return new Promise((res) => c.toBlob(res, "image/jpeg", 0.92));
+  const k = Math.min(1, LADO_MAX_FOTO / Math.max(v.videoWidth, v.videoHeight));
+  const c = (lienzo ??= document.createElement("canvas"));
+  c.width = Math.round(v.videoWidth * k);
+  c.height = Math.round(v.videoHeight * k);
+  const ctx = c.getContext("2d");
+  if (!ctx) return Promise.resolve(null);
+  ctx.drawImage(v, 0, 0, c.width, c.height);
+  return new Promise((res) => c.toBlob(res, "image/jpeg", CALIDAD_JPEG));
 }

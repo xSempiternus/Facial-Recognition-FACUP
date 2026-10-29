@@ -7,6 +7,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 from deepface import DeepFace
+from deepface.models.Detector import FacialAreaRegion
+from deepface.modules import detection as _deteccion
+from deepface.modules import modeling as _modeling
 from deepface.modules.exceptions import SpoofDetected
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
@@ -57,6 +60,7 @@ def set_config(modelo: str, detector: str, umbral: float, antispoofing: bool | N
     nuevo = {"modelo": modelo, "detector": detector, "umbral": round(float(umbral), 3),
              "antispoofing": bool(antispoofing)}
     DeepFace.build_model(modelo)  # falla antes de guardar si el modelo no carga
+    DeepFace.build_model(detector, task="face_detector")
     if nuevo["antispoofing"]:
         DeepFace.build_model("Fasnet", task="spoofing")
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -93,14 +97,62 @@ def _miniatura(img: np.ndarray, area: dict, lado: int = 160) -> bytes:
     return buf.tobytes() if ok else b""
 
 
-def analyze_face(image_bytes: bytes, miniatura: bool = False, antispoofing: bool = False) -> dict:
+# RetinaFace en DeepFace agranda toda foto a ~1024 px y le agrega un borde negro del 50 %: ~2 s por detección en CPU.
+# El camino rápido detecta sobre una copia reducida y sin borde, y recorta/alinea sobre la foto original.
+LADO_DETECCION_RAPIDA = 640
+
+
+def _analizar_rapido(img: np.ndarray, miniatura: bool) -> dict:
+    alto, ancho = img.shape[:2]
+    k = min(1.0, LADO_DETECCION_RAPIDA / max(alto, ancho))
+    chica = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else img
+    import retinaface.RetinaFace as rf
+    modelo_rf = _modeling.build_model(task="face_detector", model_name="retinaface").model
+    caras = rf.detect_faces(chica, model=modelo_rf, threshold=0.9, allow_upscaling=False)
+    if not isinstance(caras, dict) or not caras:
+        raise FaceNotFoundError("No se detectó ningún rostro en la imagen.")
+    c = max(caras.values(), key=lambda o: (o["facial_area"][2] - o["facial_area"][0])
+            * (o["facial_area"][3] - o["facial_area"][1]))
+    x1, y1, x2, y2 = (v / k for v in c["facial_area"])
+    hb, wb = alto // 2, ancho // 2  # mismo borde que usa DeepFace, para la alineación
+    pad = cv2.copyMakeBorder(img, hb, hb, wb, wb, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+
+    def punto(p):
+        return int(p[0] / k + wb), int(p[1] / k + hb)
+
+    area = FacialAreaRegion(x=int(x1) + wb, y=int(y1) + hb, w=int(x2 - x1), h=int(y2 - y1),
+                            left_eye=punto(c["landmarks"]["left_eye"]),
+                            right_eye=punto(c["landmarks"]["right_eye"]), confidence=c["score"])
+    cara = _deteccion.extract_face(facial_area=area, img=pad, align=True, expand_percentage=0,
+                                   width_border=wb, height_border=hb, detector_backend="retinaface")
+    if cara.img.shape[0] == 0 or cara.img.shape[1] == 0:
+        raise FaceNotFoundError("No se detectó ningún rostro en la imagen.")
+    emb = DeepFace.represent(img_path=np.ascontiguousarray(cara.img), model_name=config["modelo"],
+                             detector_backend="skip", enforce_detection=False, align=False)[0]["embedding"]
+    a = cara.facial_area
+    resultado = {"embedding": [float(x) for x in emb], "num_rostros": len(caras),
+                 "confianza": float(c["score"]), "tamano_rostro": a.w / ancho}
+    if miniatura:
+        resultado["miniatura"] = _miniatura(img, {"x": a.x, "y": a.y, "w": a.w, "h": a.h})
+    return resultado
+
+
+def analyze_face(image_bytes: bytes, miniatura: bool = False, antispoofing: bool = False,
+                 rapido: bool = False) -> dict:
     """
     Detecta el rostro principal (el más grande) y retorna:
     {'embedding', 'num_rostros', 'confianza', 'tamano_rostro'} (+ 'miniatura' JPEG si se pide)
     donde tamano_rostro es la fracción del ancho de la imagen que ocupa la cara.
     Con antispoofing=True lanza SpoofError si la cara parece una foto/pantalla.
+    Con rapido=True (solo retinaface, sin antispoofing) usa el camino rápido; ante cualquier problema
+    cae al camino de referencia. Úsalo solo para verificar: la inscripción siempre usa el de referencia.
     """
     img = _decode_image(image_bytes)
+    if rapido and config["detector"] == "retinaface" and not antispoofing:
+        try:
+            return _analizar_rapido(img, miniatura)
+        except Exception:  # cualquier fallo: se repite con el camino de referencia
+            pass
     try:
         faces = DeepFace.represent(
             img_path=img,
@@ -166,19 +218,34 @@ def find_match(target_embedding, stored_embeddings_dict: dict, threshold: float 
 
 def best_candidate(target_embedding, stored_embeddings_dict: dict):
     """Como find_match pero sin umbral: retorna siempre (clave_más_parecida, similitud)."""
-    best_key, best_score = None, -1.0
+    claves, filas = [], []
     for key, embs in stored_embeddings_dict.items():
         if embs and not isinstance(embs[0], (list, tuple, np.ndarray)):
             embs = [embs]  # un solo embedding
         for emb in embs:
-            score = cosine_similarity(target_embedding, emb)
-            if score > best_score:
-                best_key, best_score = key, score
-    return best_key, best_score
+            claves.append(key)
+            filas.append(emb)
+    if not filas:
+        return None, -1.0
+    m = np.asarray(filas, dtype=np.float32)
+    t = np.asarray(target_embedding, dtype=np.float32)
+    normas = np.linalg.norm(m, axis=1) * np.linalg.norm(t)
+    puntajes = np.divide(m @ t, normas, out=np.zeros(len(filas), np.float32), where=normas != 0)
+    i = int(puntajes.argmax())
+    return claves[i], float(puntajes[i])
 
 
 def warmup() -> None:
     """Carga el modelo en memoria para que la primera petición no sea lenta."""
     DeepFace.build_model(config["modelo"])
+    DeepFace.build_model(config["detector"], task="face_detector")
+    # Una pasada en vacío traza los grafos de TensorFlow: sin esto la primera verificación tarda ~9 s.
+    vacia = np.zeros((480, 640, 3), np.uint8)
+    DeepFace.represent(img_path=vacia, model_name=config["modelo"], detector_backend="skip",
+                       enforce_detection=False)
+    try:
+        DeepFace.extract_faces(img_path=vacia, detector_backend=config["detector"], enforce_detection=False)
+    except Exception:
+        pass
     if config.get("antispoofing"):
         DeepFace.build_model("Fasnet", task="spoofing")

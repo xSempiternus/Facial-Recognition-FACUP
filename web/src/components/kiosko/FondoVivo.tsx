@@ -6,6 +6,7 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
+import { useCalidad } from "./calidad";
 import Foto3D, { type Seguimiento } from "./Foto3D";
 
 const FOTOS = [
@@ -25,7 +26,12 @@ const ASPECTO: Record<ModoFondo, { filter: string; scale: number }> = {
   exito: { filter: "blur(5px) brightness(0.78) saturate(1.2) contrast(1.05)", scale: 1.04 },
 };
 
+// Radio de desenfoque por nivel: el blur de pantalla completa cuesta caro en GPU de teléfono.
+const BLUR_ESCALA = { alto: 1, medio: 0.5, bajo: 0.3 } as const;
+const conBlur = (filter: string, k: number) => filter.replace(/blur\((\d+)px\)/, (_, n) => `blur(${Math.round(Number(n) * k)}px)`);
+
 export default function FondoVivo({ seguimiento, modo }: { seguimiento: Seguimiento; modo: ModoFondo }) {
+  const calidad = useCalidad();
   const [i, setI] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setI((n) => (n + 1) % FOTOS.length), CAMBIO_MS);
@@ -35,9 +41,9 @@ export default function FondoVivo({ seguimiento, modo }: { seguimiento: Seguimie
 
   return (
     <motion.div
-      className="absolute inset-0 overflow-hidden"
+      className="absolute inset-0 overflow-hidden [will-change:filter,transform]"
       initial={false}
-      animate={ASPECTO[modo]}
+      animate={{ ...ASPECTO[modo], filter: conBlur(ASPECTO[modo].filter, BLUR_ESCALA[calidad]) }}
       transition={{ duration: 1.1, ease: EASE }}
       aria-hidden
     >

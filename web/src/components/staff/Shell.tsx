@@ -15,6 +15,7 @@ import {
   TrendingUp,
   UserPlus,
   Users,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -78,6 +79,19 @@ export function Shell({ children }: { children: ReactNode }) {
     if (token === null) router.replace("/staff/login");
   }, [token, router]);
 
+  // Cierra el menú móvil al cambiar de ruta y con Esc.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- cerrar el drawer al navegar
+    setAbierto(false);
+  }, [ruta]);
+  useEffect(() => {
+    if (!abierto) return;
+    const f = (e: KeyboardEvent) => e.key === "Escape" && setAbierto(false);
+    window.addEventListener("keydown", f);
+    return () => window.removeEventListener("keydown", f);
+  }, [abierto]);
+  const toque = useRef<{ x: number; y: number } | null>(null);
+
   useEffect(() => {
     const f = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -114,10 +128,25 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className={clsx("s-main", "s-shell")} style={{ flexDirection: "row" }}>
       <div className={clsx(colapsado && "s-collapsed", abierto && "s-open")} style={{ display: "contents" }}>
-        <aside className="s-sidebar" aria-label="Navegación del panel">
+        <aside
+          className="s-sidebar"
+          aria-label="Navegación del panel"
+          onTouchStart={(e) => (toque.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
+          onTouchEnd={(e) => {
+            const t = toque.current;
+            toque.current = null;
+            if (!t) return;
+            const dx = e.changedTouches[0].clientX - t.x;
+            const dy = e.changedTouches[0].clientY - t.y;
+            if (dx < -60 && Math.abs(dy) < Math.abs(dx)) setAbierto(false);
+          }}
+        >
           <div className="s-brand">
             <span className="s-logo" aria-hidden />
             <span>FA CUP · Staff</span>
+            <button type="button" className="s-btn ghost icon s-mobile-only s-close" aria-label="Cerrar menú" onClick={() => setAbierto(false)}>
+              <X size={18} />
+            </button>
           </div>
           <nav className="s-nav">
             {NAV.map(({ href, texto, icono: I, exacto }) => (
@@ -162,7 +191,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
         <div className="s-main">
           <header className="s-top">
-            <button type="button" className="s-btn ghost icon s-mobile-only" aria-label="Abrir menú" onClick={() => setAbierto(true)}>
+            <button type="button" className="s-btn ghost icon s-mobile-only" aria-label="Abrir menú" aria-expanded={abierto} onClick={() => setAbierto(true)}>
               <Menu size={18} />
             </button>
             <nav className="s-crumbs" aria-label="Ubicación">

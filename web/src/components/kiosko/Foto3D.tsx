@@ -7,6 +7,14 @@
 
 import type { MotionValue } from "motion/react";
 import { useEffect, useRef, useState } from "react";
+import { useCalidad, type Calidad } from "./calidad";
+
+// Por nivel de calidad: tope de FPS del shader, multiplicador de resolución y tope del pixel ratio.
+const NIVEL: Record<Calidad, { fps: number; res: number; dpr: number }> = {
+  alto: { fps: 60, res: 1, dpr: 2 },
+  medio: { fps: 30, res: 0.7, dpr: 1.5 },
+  bajo: { fps: 0, res: 0.5, dpr: 1 }, // 0 = sin shader: foto quieta
+};
 
 const VERTEX = `
 attribute vec2 aPos;
@@ -54,12 +62,17 @@ export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, 
   const [sinWebGL, setSinWebGL] = useState(false);
   const seg = useRef(seguimiento);
   const res = useRef(resolucion);
+  const calidad = useCalidad();
+  const nivel = useRef(NIVEL[calidad]);
+  const estatico = NIVEL[calidad].fps === 0;
   useEffect(() => {
     seg.current = seguimiento;
     res.current = resolucion;
-  }, [seguimiento, resolucion]);
+    nivel.current = NIVEL[calidad];
+  }, [seguimiento, resolucion, calidad]);
 
   useEffect(() => {
+    if (estatico) return; // gama baja: sin shader, foto quieta (ahorra GPU y batería)
     // Sin WebGL se muestra la foto quieta (se avisa fuera del cuerpo del efecto).
     const fallar = () => queueMicrotask(() => setSinWebGL(true));
     // Un lienzo nuevo por montaje: al desmontar se libera su contexto WebGL, y un lienzo reutilizado
@@ -70,7 +83,7 @@ export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, 
     c.className = "block h-full w-full";
     c.setAttribute("aria-hidden", "true");
     caja.appendChild(c);
-    const gl = c.getContext("webgl", { antialias: false, premultipliedAlpha: false });
+    const gl = c.getContext("webgl", { antialias: false, premultipliedAlpha: false, powerPreference: "low-power", depth: false, stencil: false });
     if (!gl) {
       c.remove();
       fallar();
@@ -129,6 +142,7 @@ export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, 
 
     let raf = 0;
     let vivo = true;
+    let ultimoCuadro = 0;
     const off = { x: 0, y: 0 };
 
     Promise.all([cargar(src), cargar(profundidad)])
@@ -142,7 +156,10 @@ export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, 
         const cuadro = () => {
           if (!vivo) return;
           raf = requestAnimationFrame(cuadro);
-          const dpr = Math.min(window.devicePixelRatio || 1, 2) * res.current;
+          const ahora = performance.now();
+          if (ahora - ultimoCuadro < 1000 / nivel.current.fps - 3) return; // tope de FPS según el dispositivo
+          ultimoCuadro = ahora;
+          const dpr = Math.min(window.devicePixelRatio || 1, nivel.current.dpr) * res.current * nivel.current.res;
           const w = Math.round(c.clientWidth * dpr);
           const h = Math.round(c.clientHeight * dpr);
           if (c.width !== w || c.height !== h) {
@@ -179,11 +196,11 @@ export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, 
       gl.getExtension("WEBGL_lose_context")?.loseContext();
       c.remove();
     };
-  }, [src, profundidad, fuerza]);
+  }, [src, profundidad, fuerza, estatico]);
 
-  if (sinWebGL) {
+  if (sinWebGL || estatico) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt="" className={`h-full w-full object-cover ${className ?? ""}`} />;
+    return <img src={src} alt="" decoding="async" className={`h-full w-full object-cover ${className ?? ""}`} />;
   }
   return <div ref={contenedor} className={`h-full w-full ${className ?? ""}`} />;
 }

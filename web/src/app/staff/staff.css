@@ -26,6 +26,7 @@
 
   position: fixed;
   inset: 0;
+  height: 100dvh;
   display: flex;
   background: var(--bg);
   color: var(--fg);
@@ -281,12 +282,17 @@
   .s-sidebar {
     position: fixed;
     inset: 0 auto 0 0;
-    width: 260px !important;
+    width: min(288px, 86vw) !important;
     transform: translateX(-100%);
-    transition: transform 0.2s ease;
+    visibility: hidden;
+    transition: transform 0.2s ease, visibility 0s linear 0.2s;
+    padding-bottom: env(safe-area-inset-bottom);
+    overscroll-behavior: contain;
   }
   .s-open .s-sidebar {
     transform: none;
+    visibility: visible;
+    transition-delay: 0s;
   }
   .s-open .s-scrim {
     display: block;
@@ -1189,5 +1195,375 @@ input[type="range"].s-range {
   }
   .s-table .act .s-btn {
     margin: 0 0 2px 2px;
+  }
+}
+
+/* ============================================================ móvil / táctil */
+.s-btn.s-close {
+  display: none;
+  margin-left: auto;
+}
+.s-camwrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.s-cam .msg.demo {
+  position: absolute;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  max-width: none;
+  padding: 0;
+  font-size: 12px;
+  color: #ddd;
+}
+.s-thumb span {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.s-thumb span b {
+  font-weight: 600;
+  color: var(--fg-2);
+}
+.s-thumb span em {
+  font-style: normal;
+}
+.s-ins-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.s-split.even {
+  grid-template-columns: 1fr 1fr;
+}
+.s-fixbar {
+  display: contents;
+}
+.s-scroll {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.s-seg button:focus-visible,
+.s-chip:focus-visible {
+  box-shadow: var(--ring);
+}
+
+/* tablet y menos: compacto pero táctil */
+@media (max-width: 820px) {
+  .s-btn.s-close {
+    display: inline-flex;
+  }
+  .s-top {
+    height: 56px;
+    padding: 0 10px 0 6px;
+    gap: 6px;
+  }
+  .s-btn.icon {
+    width: 44px;
+  }
+  .s-btn.s-mobile-only {
+    height: 44px;
+  }
+  .s-search {
+    width: 44px;
+    height: 44px;
+    min-width: 0;
+  }
+  .s-link {
+    height: 46px;
+    font-size: 15px;
+  }
+  .s-page {
+    padding: 16px max(14px, env(safe-area-inset-right)) calc(56px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  }
+  .s-head h1 {
+    font-size: 22px;
+  }
+  .s-cmd {
+    margin-top: max(10px, env(safe-area-inset-top));
+    max-height: calc(100dvh - 20px);
+  }
+  .s-cmd input {
+    font-size: 16px;
+    height: 52px;
+  }
+  .s-cmd li button {
+    height: 48px;
+    font-size: 15px;
+  }
+  .s-cmd ul {
+    max-height: calc(100dvh - 120px);
+  }
+  .s-toasts {
+    right: 12px;
+    left: 12px;
+    width: auto;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+}
+
+/* móvil: controles de 44px, texto de 16px (iOS no hace zoom) */
+@media (max-width: 720px) {
+  .s-input,
+  .s-select {
+    height: 48px;
+    font-size: 16px;
+  }
+  .s-btn {
+    height: 44px;
+    padding: 0 14px;
+  }
+  .s-btn.sm {
+    height: 40px;
+  }
+  .s-btn.icon.sm {
+    width: 40px;
+  }
+  .s-btn.s-cta {
+    height: 52px;
+    font-size: 16px;
+    width: 100%;
+  }
+  .s-chip {
+    height: 40px;
+    padding: 0 14px;
+    flex: none;
+  }
+  .s-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-width: 100%;
+    flex: 1 1 100%;
+    scrollbar-width: none;
+  }
+  .s-seg button {
+    height: 40px;
+  }
+  .s-check {
+    min-height: 44px;
+    gap: 12px;
+  }
+  .s-check input {
+    width: 22px;
+    height: 22px;
+    margin-top: 1px;
+    flex: none;
+  }
+  .s-card-h,
+  .s-card-b {
+    padding: 14px;
+  }
+  .s-card-h .s-input-wrap {
+    flex: 1 1 100% !important;
+    max-width: none !important;
+  }
+  .s-stat .v {
+    font-size: 26px;
+  }
+  .s-grid.kpi {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .s-grid.kpi > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+  .s-split,
+  .s-split.even {
+    grid-template-columns: 1fr;
+  }
+  .s-dialog,
+  .s-dialog.wide {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+  .s-dialog-f {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  .s-dialog-f .s-btn {
+    flex: 1 1 140px;
+  }
+  .s-chart {
+    height: 140px;
+    max-width: 100%;
+  }
+  .s-table-wrap {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  /* inscribir: visor grande y vertical, barra de captura fija abajo */
+  .s-ins {
+    gap: 10px;
+    padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+  .s-ins-side {
+    display: contents;
+  }
+  .s-ins-cam {
+    order: 1;
+  }
+  .s-ins-thumbs {
+    order: 2;
+  }
+  .s-ins-person {
+    order: 3;
+  }
+  .s-ins-tips {
+    order: 4;
+  }
+  .s-ins-cam .s-card-h {
+    padding: 12px 14px;
+  }
+  .s-ins-cam .s-card-b {
+    padding: 10px;
+  }
+  .s-ins-cam .s-card-h h2 {
+    font-size: 15px;
+  }
+  .s-camwrap .s-cam {
+    aspect-ratio: 3 / 4;
+    width: min(100%, calc(70dvh * 3 / 4));
+    max-height: 70dvh;
+    margin: 0 auto;
+    border-radius: 12px;
+  }
+  .s-cam .guide {
+    width: 64%;
+    box-shadow: 0 0 0 999px rgb(0 0 0 / 0.38);
+    border: 2px solid rgb(255 255 255 / 0.75);
+  }
+  .s-camwrap.fija .s-camactions,
+  .s-fixbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 10px;
+    padding: 10px max(14px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+  }
+  .s-camwrap .s-capture,
+  .s-fixbar .s-capture {
+    height: 56px;
+    font-size: 16px;
+    font-weight: 600;
+    border-radius: 10px;
+  }
+  .s-camwrap .s-upload {
+    height: 56px;
+    flex: none;
+  }
+  .s-thumbs {
+    gap: 10px;
+  }
+  .s-thumb {
+    aspect-ratio: 3 / 4;
+    border-radius: 8px;
+  }
+  .s-thumb .s-redo {
+    width: 44px;
+    height: 44px;
+    right: 2px;
+    bottom: 2px;
+    background: rgb(0 0 0 / 0.55);
+    color: #fff;
+    border-color: transparent;
+  }
+  .s-steps {
+    width: 100%;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+  .s-steps span {
+    flex: 1;
+    text-align: center;
+    padding: 6px 4px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+  .s-steps span.on {
+    border-color: var(--brand);
+  }
+  .s-steps i {
+    display: none;
+  }
+  .s-actions:has(> .s-steps) {
+    width: 100%;
+  }
+
+  /* jugadores: filas como tarjetas apiladas, con acciones siempre visibles */
+  .s-table.cards thead {
+    display: none;
+  }
+  .s-table.cards,
+  .s-table.cards tbody {
+    display: block;
+  }
+  .s-table.cards tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    align-items: center;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .s-table.cards tr:last-child {
+    border-bottom: 0;
+  }
+  .s-table.cards td {
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+  .s-table.cards tbody tr:hover td {
+    background: none;
+  }
+  .s-table.cards td.num::before {
+    content: "Asist. ";
+    color: var(--fg-3);
+    font-size: 12px;
+  }
+  .s-table.cards td.act {
+    grid-column: 1 / -1;
+    width: auto;
+    min-width: 0;
+    display: flex;
+    justify-content: flex-start;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+  .s-table.cards td.act .s-btn {
+    margin: 0;
+    flex: 1;
+    width: auto;
+    max-width: 72px;
+  }
+  .s-table.cards .s-avatar {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+@media (max-width: 380px) {
+  .s-head h1 {
+    font-size: 20px;
+  }
+  .s-stat .v {
+    font-size: 24px;
+  }
+}
+
+@media (pointer: coarse) {
+  .s-link,
+  .s-cmd li button {
+    min-height: 44px;
   }
 }

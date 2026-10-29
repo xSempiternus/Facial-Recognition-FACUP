@@ -8,9 +8,9 @@ import { Alerta, Badge, Button, Campo, Dialogo, PageHeader } from "@/components/
 import { ApiError, CATEGORIAS, api, type ResultadoInscripcion } from "@/lib/staff-api";
 
 const POSES = [
-  { titulo: "De frente", texto: "Mirando directo a la cámara." },
-  { titulo: "Un poquito a su izquierda", texto: "Gira apenas la cabeza, sin dejar de mirar la cámara." },
-  { titulo: "Un poquito a su derecha", texto: "Igual, pero hacia el otro lado." },
+  { titulo: "De frente", corto: "Frente", texto: "Mirando directo a la cámara." },
+  { titulo: "Un poquito a su izquierda", corto: "Izquierda", texto: "Gira apenas la cabeza, sin dejar de mirar la cámara." },
+  { titulo: "Un poquito a su derecha", corto: "Derecha", texto: "Igual, pero hacia el otro lado." },
 ];
 
 type Foto = { blob: Blob; url: string };
@@ -111,7 +111,7 @@ export default function Inscribir() {
       </PageHeader>
 
       {paso === 1 && (
-        <form className="s-card" onSubmit={continuar} style={{ maxWidth: 560 }} noValidate>
+        <form className="s-card s-form" onSubmit={continuar} style={{ maxWidth: 560 }} noValidate>
           <div className="s-card-b" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <Campo etiqueta="Nombre y apellido">
               {(id) => <input id={id} className="s-input" value={nombre} maxLength={60} placeholder="Ej: Sofía Pérez" onChange={(e) => setNombre(e.target.value)} autoComplete="off" />}
@@ -143,7 +143,7 @@ export default function Inscribir() {
               </span>
             </label>
             {errorDatos && <Alerta tono="err">{errorDatos}</Alerta>}
-            <Button type="submit" variante="primary">
+            <Button type="submit" variante="primary" className="s-cta">
               Continuar <ArrowRight size={15} aria-hidden />
             </Button>
           </div>
@@ -151,8 +151,8 @@ export default function Inscribir() {
       )}
 
       {paso === 2 && (
-        <div className="s-split" style={{ gridTemplateColumns: "1fr 1fr" }}>
-          <div className="s-card">
+        <div className="s-split even s-ins">
+          <div className="s-card s-ins-cam">
             <div className="s-card-h">
               <div>
                 <h2>{fotos.length < 3 ? `Foto ${fotos.length + 1} de 3: ${POSES[fotos.length].titulo}` : "Las 3 fotos están listas"}</h2>
@@ -162,11 +162,13 @@ export default function Inscribir() {
             <div className="s-card-b" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {errorEnvio && <Alerta tono="err">{errorEnvio}</Alerta>}
               {fotos.length < 3 ? (
-                <Camara key={fotos.length} onCaptura={agregar} deshabilitado={enviando} etiqueta={`Tomar foto ${fotos.length + 1}`} />
+                <Camara key={fotos.length} fija onCaptura={agregar} deshabilitado={enviando} etiqueta={`Tomar foto ${fotos.length + 1}`} />
               ) : (
-                <Button variante="brand" cargando={enviando} onClick={() => enviar(false)}>
-                  {!enviando && <UserPlus size={16} aria-hidden />} {enviando ? "Analizando las caras…" : `Inscribir a ${nombre.trim().split(/\s+/)[0]}`}
-                </Button>
+                <div className="s-fixbar">
+                  <Button variante="brand" className="s-capture" block cargando={enviando} onClick={() => enviar(false)}>
+                    {!enviando && <UserPlus size={16} aria-hidden />} {enviando ? "Analizando las caras…" : `Inscribir a ${nombre.trim().split(/\s+/)[0]}`}
+                  </Button>
+                </div>
               )}
               {fotos.length > 0 && fotos.length < 3 && (
                 <Button cargando={enviando} onClick={() => enviar(false)}>
@@ -179,8 +181,8 @@ export default function Inscribir() {
             </div>
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div className="s-card s-card-b">
+          <div className="s-ins-side">
+            <div className="s-card s-card-b s-ins-person">
               <div className="s-person">
                 <span className="s-avatar" aria-hidden>
                   {nombre.trim()[0]?.toUpperCase()}
@@ -191,7 +193,7 @@ export default function Inscribir() {
                 </div>
               </div>
             </div>
-            <div className="s-card s-card-b">
+            <div className="s-card s-card-b s-ins-thumbs">
               <div className="s-thumbs">
                 {POSES.map((p, i) => (
                   <div key={p.titulo} className="s-thumb" data-on={i < fotos.length} data-cur={i === fotos.length}>
@@ -199,20 +201,21 @@ export default function Inscribir() {
                       <>
                         {/* eslint-disable-next-line @next/next/no-img-element -- vista previa local (blob:) */}
                         <img src={fotos[i].url} alt={`Foto ${i + 1}: ${p.titulo}`} />
-                        <Button icono sm aria-label={`Repetir foto ${i + 1}`} onClick={() => quitar(i)} disabled={enviando}>
+                        <Button icono sm className="s-redo" aria-label={`Repetir foto ${i + 1}`} onClick={() => quitar(i)} disabled={enviando}>
                           <RotateCcw size={13} />
                         </Button>
                       </>
                     ) : (
                       <span>
-                        {i + 1}. {p.titulo}
+                        <b>{i + 1}</b>
+                        <em>{p.corto}</em>
                       </span>
                     )}
                   </div>
                 ))}
               </div>
             </div>
-            <div className="s-card s-card-b muted" style={{ fontSize: 13 }}>
+            <div className="s-card s-card-b muted s-ins-tips" style={{ fontSize: 13 }}>
               <b style={{ color: "var(--fg)" }}>Para una buena foto</b>
               <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
                 <li>A unos 50 cm: la cara grande y centrada.</li>

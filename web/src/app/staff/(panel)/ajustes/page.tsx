@@ -27,7 +27,7 @@ export default function Ajustes() {
         </div>
         <div className="s-card-b" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {jug.data && (
-            <div className="s-grid c2" style={{ maxWidth: 440 }}>
+            <div className="s-grid c2 kpi" style={{ maxWidth: 440 }}>
               <div className="s-card s-stat">
                 <div className="k">Con autorización firmada</div>
                 <div className="v">{con}</div>

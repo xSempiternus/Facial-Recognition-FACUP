@@ -1,21 +1,25 @@
 "use client";
 
-// Kiosko de llegada FA CUP Chile, "cristal sobre la cancha": detrás, fotos 3D de FA CUP siempre en movimiento;
-// delante, la cámara dentro de un lente con bisel de cristal y el texto en una hoja de cristal. Sin botones: al
-// quedarse quieto frente al lente, la foto se saca sola, la API reconoce al niño y su nombre aparece abajo.
-// Funciona en tablet y teléfono, en vertical u horizontal.
+// Kiosko de llegada FA CUP Chile, "liquid glass": detrás, una aurora de luz verde (y las fotos 3D de FA CUP en el
+// inicio); delante, la cámara dentro de un lente con bisel de cristal y el texto en una tarjeta de cristal. Sin
+// botones: al quedarse quieto frente al lente, la foto se saca sola, la API reconoce al niño, su foto queda nítida
+// en el círculo y su nombre aparece en la tarjeta. Móvil vertical primero; también tablet y escritorio.
 
 import { AnimatePresence, motion, MotionConfig, useMotionValue } from "motion/react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { desbloquearVoz, hablar } from "@/lib/voz";
 import { llegadasDeHoy, precalentar, verificar, type Verificacion } from "@/lib/api";
-import { calidadActual, iniciarCalidad, restriccionesCamara, useCalidad } from "./calidad";
+import { calidadActual, iniciarCalidad, restriccionesCamara } from "./calidad";
 import type { EstadoEscaner } from "./Escaner";
+import Aurora, { type ModoAurora } from "./Aurora";
 import FondoVivo from "./FondoVivo";
 import Inicio from "./Inicio";
 import Lente from "./Lente";
 import Mascota, { type EstadoMascota } from "./Mascota";
+import Rodillo from "./Rodillo";
+import Tarjeta, { type TextoTarjeta } from "./Tarjeta";
+import { k } from "./tiempo";
 import { useRastreoCara, type Objetivo, type Postura } from "./useRastreoCara";
 
 const MOSTRAR_RESULTADO_MS = 4200;
@@ -23,12 +27,9 @@ const ESPERA_MISMO_NIÑO_MS = 6000; // tras un resultado, no vuelve a escanear a
 const INICIO_TRAS_MS = 1500; // sin nadie cerca este tiempo → pantalla de inicio
 const EASE = [0.22, 1, 0.36, 1] as const;
 
-type Resultado = {
+type Resultado = TextoTarjeta & {
   tono: "exito" | "aviso" | "error";
-  titulo: string;
-  sub: string;
-  detalle?: string | null; // categoría, en gris
-  grande?: boolean; // el nombre se muestra más grande que un mensaje
+  sobrio?: boolean; // "ya registrado"
   mascota: EstadoMascota;
 };
 
@@ -63,16 +64,32 @@ function mensajeErrorCamara(e: unknown) {
   return e instanceof Error ? e.message : "No se pudo iniciar la cámara. Toca la pantalla para reintentar.";
 }
 
-// Círculo de la cámara: centrado y arriba, para dejar espacio a la hoja de texto. En vertical (teléfono, tablet
-// parada) usa el ancho; en horizontal, el alto.
-function calcularObjetivo(ancho: number, alto: number): Objetivo {
-  const vertical = alto > ancho;
-  const r = vertical ? Math.min(ancho * 0.34, alto * 0.21) : alto * 0.23;
-  return { cx: ancho / 2, cy: alto * (vertical ? 0.42 : 0.38), r };
-}
+// Composición según la pantalla. Vertical (teléfono, tablet parada): círculo grande arriba y tarjeta debajo.
+// Horizontal (tablet acostada, escritorio): círculo a la izquierda y tarjeta a su lado. `E` es el radio exterior
+// del lente (cámara + bisel de cristal).
+type Composicion = Objetivo & { banda: number; E: number; lado: boolean; tarjetaX: number; tarjetaY: number; tarjetaW: number };
 
-// Ancho del bisel de cristal alrededor de la cámara.
-const anchoBisel = (r: number) => Math.min(52, Math.max(28, r * 0.2));
+const limitar = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+function componer(ancho: number, alto: number): Composicion {
+  const lado = ancho / alto > 1.25;
+  if (lado) {
+    const E = Math.min(alto * 0.36, ancho * 0.28);
+    const banda = limitar(E * 0.14, 22, 44);
+    const cx = Math.max(E + ancho * 0.05, ancho * 0.3);
+    const cy = alto * 0.54;
+    const tarjetaX = cx + E + ancho * 0.045;
+    return { cx, cy, r: E - banda, banda, E, lado, tarjetaX, tarjetaY: 0, tarjetaW: Math.min(620, ancho - tarjetaX - ancho * 0.05) };
+  }
+  const E = Math.min(ancho * 0.455, alto * 0.28);
+  const banda = limitar(E * 0.15, 22, 44);
+  const hueco = Math.max(18, alto * 0.028);
+  // El conjunto (lente + tarjeta, ~210 px) se centra bajo la barra superior, un poco por encima del centro óptico.
+  const libre = alto - 76 - (2 * E + hueco + 210);
+  const cy = 76 + Math.max(0, libre * 0.42) + E;
+  const tarjetaW = Math.min(560, ancho - 32);
+  return { cx: ancho / 2, cy, r: E - banda, banda, E, lado, tarjetaX: (ancho - tarjetaW) / 2, tarjetaY: cy + E + hueco, tarjetaW };
+}
 
 // Tamaño de la ventana como estado externo (se actualiza al redimensionar).
 const suscribirResize = (avisar: () => void) => {
@@ -90,19 +107,19 @@ function useTamañoPantalla() {
 function aResultado(v: Verificacion): { resultado: Resultado; frase: string | null } {
   if (v.ok) {
     const nombre = v.nombre.split(" ")[0];
-    const hora = v.registradoALas?.slice(11, 16);
+    const horaReg = v.registradoALas?.slice(11, 16);
     if (v.yaRegistrado) {
       return {
         resultado: {
-          tono: "exito", titulo: nombre, grande: true, detalle: v.categoria,
-          sub: hora ? `Ya estabas registrado hoy a las ${hora}` : "Ya estabas registrado hoy", mascota: "de_nuevo",
+          tono: "exito", sobrio: true, titulo: nombre, grande: true, detalle: v.categoria, saludo: "Ya estabas registrado",
+          hora: horaReg ? `Hoy a las ${horaReg}` : "Hoy", mascota: "de_nuevo",
         },
         frase: `¡Hola de nuevo, ${nombre}!`,
       };
     }
     const ahora = new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
     return {
-      resultado: { tono: "exito", titulo: nombre, grande: true, detalle: v.categoria, sub: `${animo()} Llegada a las ${ahora}`, mascota: "celebra" },
+      resultado: { tono: "exito", titulo: nombre, grande: true, detalle: v.categoria, saludo: animo(), hora: `Llegada ${ahora}`, mascota: "celebra" },
       frase: `¡Hola, ${nombre}! ¡A jugar!`,
     };
   }
@@ -137,13 +154,12 @@ const DEMO_VERIFICACION: Record<string, Verificacion> = {
 
 export default function Kiosko() {
   const demo = useDemo();
-  const calidad = useCalidad();
-  const alta = calidad === "alto";
   const video = useRef<HTMLVideoElement>(null);
   const progreso = useMotionValue(0);
 
   const { ancho, alto } = useTamañoPantalla();
-  const circulo = useMemo(() => calcularObjetivo(ancho, alto), [ancho, alto]);
+  const comp = useMemo(() => componer(ancho, alto), [ancho, alto]);
+  const circulo = useMemo<Objetivo>(() => ({ cx: comp.cx, cy: comp.cy, r: comp.r }), [comp]);
   const objetivo = useRef<Objetivo>(circulo); // el bucle de rastreo lo lee cada cuadro
   useEffect(() => {
     objetivo.current = circulo;
@@ -155,6 +171,8 @@ export default function Kiosko() {
   const [resultadoReal, setResultado] = useState<Resultado | null>(null);
   const [hoy, setHoy] = useState<number | null>(null);
   const [esperarSalida, setEsperarSalida] = useState(false);
+  const [fotoUrl, setFotoUrl] = useState<string | null>(null); // foto capturada, para mostrarla nítida en el círculo
+  const [repetir, setRepetir] = useState(0); // solo demo: tocar la pantalla repite la secuencia
   const voz = useRef(true);
   const prueba = useRef(false);
 
@@ -249,6 +267,18 @@ export default function Kiosko() {
     };
   }, [errorCamara]);
 
+  // La foto capturada es un objectURL: se revoca al reemplazarla y al salir.
+  useEffect(() => {
+    return () => {
+      if (fotoUrl) URL.revokeObjectURL(fotoUrl);
+    };
+  }, [fotoUrl]);
+
+  // Escala de tiempo de QA (?lento=N) para las animaciones CSS.
+  useEffect(() => {
+    k();
+  }, []);
+
   // Contador de llegadas de hoy.
   useEffect(() => {
     const cargar = () => llegadasDeHoy().then(setHoy);
@@ -259,7 +289,14 @@ export default function Kiosko() {
 
   // Verificación: feedback inmediato (fase "enviando" apenas se decide la foto), petición cancelable.
   const pendiente = useRef<AbortController | null>(null);
-  useEffect(() => () => pendiente.current?.abort(), []);
+  const subeContador = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(
+    () => () => {
+      pendiente.current?.abort();
+      clearTimeout(subeContador.current);
+    },
+    [],
+  );
   const alCapturando = useCallback(() => setFase("enviando"), []);
   const alFallarCaptura = useCallback(() => setFase("escaneando"), []);
   const alCapturar = useCallback(async (foto: Blob) => {
@@ -268,7 +305,12 @@ export default function Kiosko() {
     const v = await verificar(foto, ctl.signal);
     if (pendiente.current !== ctl) return; // cancelada o reemplazada
     const { resultado, frase } = aResultado(v);
-    if (v.ok && !v.yaRegistrado) setHoy((n) => (n === null ? n : n + 1));
+    setFotoUrl(URL.createObjectURL(foto));
+    // El contador sube cuando la secuencia de éxito llega a la esquina: el rodillo se ve, no pasa de golpe.
+    if (v.ok && !v.yaRegistrado) {
+      clearTimeout(subeContador.current);
+      subeContador.current = setTimeout(() => setHoy((n) => (n === null ? n : n + 1)), 900 * k());
+    }
     setResultado(resultado);
     setFase("resultado");
     if (frase && voz.current) hablar(frase);
@@ -321,6 +363,18 @@ export default function Kiosko() {
     if (demo === "escaneando") progreso.set(0.62);
   }, [demo, progreso]);
 
+  // Demo: contador de ejemplo (11) que sube a 12 con el rodillo al reconocer; tocar la pantalla repite la secuencia.
+  const [demoHoy, setDemoHoy] = useState(11);
+  useEffect(() => {
+    if (demo !== "reconocido") return;
+    const id = setTimeout(() => setDemoHoy(12), 900 * k());
+    return () => {
+      clearTimeout(id);
+      setDemoHoy(11);
+    };
+  }, [demo, repetir]);
+  const hoyMostrado = enDemo ? demoHoy : hoy;
+
   // Fin del resultado: vuelve a escanear, pero espera a que el niño se vaya (o pasen unos segundos).
   const terminarResultado = useCallback(() => {
     setResultado(null);
@@ -350,7 +404,7 @@ export default function Kiosko() {
   const mostrarInicio = !sinCamara && fase === "escaneando" && !esperarSalida && (!listo || (lejos && inicioArmado));
 
   // Qué dice la pantalla y de qué color va el anillo.
-  let texto: { titulo: string; sub: string; detalle?: string | null; grande?: boolean };
+  let texto: TextoTarjeta;
   let estado: EstadoEscaner;
   if (sinCamara) {
     texto = {
@@ -383,46 +437,114 @@ export default function Kiosko() {
 
   const resultadoVisible = fase === "resultado";
   const exito = resultadoVisible && resultado?.tono === "exito";
+  const sobrio = exito && Boolean(resultado?.sobrio);
+  const T = k();
 
-  const { cx, cy, r } = circulo;
-  const banda = anchoBisel(r);
+  // Foto del niño nítida en el círculo (cuadro capturado; en demo, un recorte de campeones.jpg).
+  const mostrarFoto = resultadoVisible && resultado?.tono !== "error" && (enDemo ? demo !== "error" : Boolean(fotoUrl));
+  const hayError = sinCamara || (resultadoVisible && resultado?.tono === "error");
+  const modoAurora: ModoAurora = hayError
+    ? "error"
+    : resultadoVisible
+      ? resultado?.tono === "aviso"
+        ? "aviso"
+        : "exito"
+      : mostrarInicio
+        ? "inicio"
+        : "escaneo";
+
+  const { cx, cy, r, banda, lado } = comp;
+  const demoCamara = enDemo && demo !== "camara" && demo !== "inicio" && demo !== "error";
+  // Demo: recorte de campeones.jpg (1408 px de ancho) centrado en la cara de un niño, con la cara ocupando ~55% del círculo.
+  const kk = (r * 2 * 0.55 * 1.0) / 92;
+  const recorte: React.CSSProperties = {
+    left: cx - r,
+    top: cy - r,
+    width: r * 2,
+    height: r * 2,
+    backgroundImage: "url(/inicio/campeones.jpg)",
+    backgroundSize: `${1408 * kk}px auto`,
+    backgroundPosition: `${r - 1095 * kk}px ${r - 478 * kk}px`,
+  };
+  const filtroFoto = resultado?.tono === "aviso" ? "saturate(0.7) brightness(0.8)" : "brightness(1.08) saturate(1.1)";
 
   return (
     <MotionConfig reducedMotion="user">
       <main
         className="relative h-dvh w-full overflow-hidden bg-fondo"
-        onClick={() => resultadoVisible && prueba.current && terminarResultado()}
+        onClick={() => {
+          if (resultadoVisible && prueba.current) terminarResultado();
+          else if (enDemo) setRepetir((n) => n + 1);
+        }}
       >
-        {/* Fondo vivo: fotos 3D de FA CUP, nítidas en el inicio y desenfocadas tras el cristal al escanear */}
+        {/* Aurora: la luz que el cristal refracta. Encima, las fotos 3D de FA CUP (nítidas en el inicio). */}
+        <Aurora modo={modoAurora} />
         <FondoVivo seguimiento={seguimiento} modo={mostrarInicio ? "inicio" : exito ? "exito" : resultadoVisible ? "resultado" : "escaneo"} />
+        <div className="grano" aria-hidden />
+        <div className="vineta" aria-hidden />
 
         {/* Lente: cámara + bisel de cristal + marcas. Al salir del inicio se acerca desde atrás. */}
         <motion.div
+          key={`lente${repetir}`}
           className="absolute inset-0"
           style={{ transformOrigin: `${cx}px ${cy}px` }}
           initial={false}
           animate={mostrarInicio ? { opacity: 0, scale: 0.86 } : { opacity: 1, scale: 1 }}
           transition={mostrarInicio ? { duration: 0.5, ease: EASE } : { type: "spring", stiffness: 140, damping: 22 }}
         >
-          {/* Cámara: solo dentro del círculo (clip-path, más barato que una máscara sobre video en vivo), en espejo. */}
-          <video
-            ref={video}
-            autoPlay
-            muted
-            playsInline
-            disablePictureInPicture
-            className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
-            style={{ clipPath: `circle(${r}px at ${cx}px ${cy}px)` }}
-          />
-          {/* Al mostrar un resultado, la cámara se apaga con una capa negra (solo opacidad: sin filtros sobre el video) */}
+          {/* Temblor suave del aviso (ámbar): 2 ciclos, amplitud 6 px */}
           <motion.div
-            className="pointer-events-none absolute rounded-full bg-black"
-            style={{ left: cx - r, top: cy - r, width: r * 2, height: r * 2 }}
-            initial={false}
-            animate={{ opacity: exito ? 0.12 : resultadoVisible ? 0.72 : 0 }}
-            transition={{ duration: 0.4, ease: EASE }}
-          />
-          <Lente objetivo={circulo} banda={banda} progreso={progreso} estado={estado} />
+            className="absolute inset-0"
+            initial={estado === "aviso" ? { x: 0 } : false}
+            animate={estado === "aviso" ? { x: [0, -6, 6, -6, 6, 0] } : { x: 0 }}
+            transition={estado === "aviso" ? { duration: 0.9 * T, delay: 0.25 * T, ease: "easeInOut" } : { duration: 0.2 }}
+          >
+            {/* Cámara: solo dentro del círculo (clip-path, más barato que una máscara sobre video en vivo), en espejo. */}
+            <div className="absolute inset-0" style={{ clipPath: `circle(${r}px at ${cx}px ${cy}px)` }}>
+              {/* El espejo va en el video, no en el recorte: así el círculo queda donde está aunque no esté centrado. */}
+              <video ref={video} autoPlay muted playsInline disablePictureInPicture className="absolute inset-0 h-full w-full -scale-x-100 object-cover" />
+            </div>
+            {/* Demo: recorte de una foto de FA CUP donde iría la cámara */}
+            {demoCamara && <div className="absolute rounded-full" style={recorte} />}
+            {/* Foto capturada: nítida y brillante, con el mismo encuadre que la cámara. Sin capas que la oscurezcan. */}
+            <AnimatePresence>
+              {mostrarFoto && (
+                <motion.div
+                  key={`foto${repetir}`}
+                  className="absolute inset-0"
+                  style={{ clipPath: `circle(${r}px at ${cx}px ${cy}px)` }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0, transition: { duration: 0.35 } }}
+                  transition={{ duration: 0.28 * T, ease: "easeOut" }}
+                >
+                  <motion.div
+                    className="absolute inset-0"
+                    style={{ transformOrigin: `${cx}px ${cy}px` }}
+                    initial={{ scale: 1.07 }}
+                    animate={{ scale: 1 }}
+                    transition={{ duration: 1.1 * T, ease: EASE }}
+                  >
+                    {enDemo || !fotoUrl ? (
+                      <div className="absolute rounded-full" style={{ ...recorte, filter: filtroFoto }} />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element -- objectURL local del cuadro capturado
+                      <img src={fotoUrl} alt="" className="absolute inset-0 h-full w-full -scale-x-100 object-cover" style={{ filter: filtroFoto }} />
+                    )}
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+            {/* Sin cámara o error: el círculo se atenúa un poco */}
+            <motion.div
+              className="pointer-events-none absolute rounded-full bg-black"
+              style={{ left: cx - r, top: cy - r, width: r * 2, height: r * 2 }}
+              initial={false}
+              animate={{ opacity: hayError ? 0.55 : 0 }}
+              transition={{ duration: 0.4, ease: EASE }}
+            />
+            <Lente key={`l${repetir}`} objetivo={circulo} banda={banda} progreso={progreso} estado={estado} sobrio={sobrio} />
+          </motion.div>
         </motion.div>
 
         {/* Inicio: saludo sobre el fondo vivo mientras no hay nadie cerca */}
@@ -432,68 +554,43 @@ export default function Kiosko() {
 
         {/* Barra superior: logo y llegadas del día, discretos */}
         <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-4 pl-[max(1rem,4vw,env(safe-area-inset-left))] pr-[max(1rem,4vw,env(safe-area-inset-right))] pt-[max(1rem,3.5vh,env(safe-area-inset-top))]">
-          <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(30px,4.4vh,44px)] w-auto drop-shadow-[0_2px_8px_rgba(0,0,0,.45)]" />
-          {hoy !== null && (
+          <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(28px,4.2vh,44px)] w-auto drop-shadow-[0_2px_8px_rgba(0,0,0,.45)]" />
+          {hoyMostrado !== null && (
             <motion.p
-              className="cristal flex min-h-11 items-center gap-2.5 rounded-[20px] px-4 py-2 text-[clamp(0.9rem,1.3vw,1.05rem)] text-texto/85"
+              className="cristal flex min-h-11 items-center gap-2.5 rounded-full px-4 py-1.5 text-[clamp(0.85rem,1.2vw,1rem)] font-medium text-texto/90"
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ type: "spring", stiffness: 200, damping: 24 }}
             >
-              <motion.span
-                key={hoy}
-                className="tabular text-[clamp(1.4rem,2.6vw,2rem)] font-semibold leading-none tracking-[-0.03em] text-texto"
-                initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ type: "spring", stiffness: 300, damping: 22 }}
-              >
-                {hoy}
-              </motion.span>
-              {hoy === 1 ? "llegada hoy" : "llegadas hoy"}
+              <Rodillo valor={hoyMostrado} className="text-[clamp(1.3rem,2.4vw,1.8rem)] font-semibold leading-none tracking-[-0.03em] text-texto" />
+              <span className="whitespace-nowrap">{hoyMostrado === 1 ? "llegada hoy" : "llegadas hoy"}</span>
             </motion.p>
           )}
         </header>
 
-        {/* Hoja de cristal bajo el lente: guía, y al reconocer, el nombre en grande */}
+        {/* Tarjeta de cristal: guía, y al reconocer, el nombre en grande. Debajo del lente en vertical, a su lado en horizontal. */}
         <AnimatePresence>
           {!mostrarInicio && (
             <motion.div
-              key="hoja"
-              className="absolute inset-x-0 z-20 flex justify-center px-4"
-              style={{ top: cy + r + banda + Math.max(20, alto * 0.035) }}
+              key={`hoja${repetir}`}
+              className="absolute z-20 flex"
+              style={
+                lado
+                  ? { left: comp.tarjetaX, width: comp.tarjetaW, top: 0, bottom: 0, alignItems: "center" }
+                  : { left: comp.tarjetaX, width: comp.tarjetaW, top: comp.tarjetaY }
+              }
               initial={{ opacity: 0, y: 24 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 16, transition: { duration: 0.3 } }}
-              transition={{ type: "spring", stiffness: 160, damping: 24 }}
+              transition={{ type: "spring", stiffness: 160, damping: 24, delay: exito ? 0.4 * T : 0 }}
             >
-              <motion.div
-                layout={alta}
-                className="cristal w-full max-w-[660px] rounded-[34px] px-7 py-6 text-center sm:px-12 sm:py-7"
-                data-tono={resultadoVisible ? resultado?.tono : sinCamara ? "error" : undefined}
-                transition={{ layout: { type: "spring", stiffness: 260, damping: 30 } }}
-              >
-                <AnimatePresence mode="wait" initial={false}>
-                  <motion.div
-                    key={texto.titulo + texto.sub}
-                    initial={alta ? { opacity: 0, y: 8, filter: "blur(4px)" } : { opacity: 0, y: 6 }}
-                    animate={alta ? { opacity: 1, y: 0, filter: "blur(0px)" } : { opacity: 1, y: 0 }}
-                    exit={alta ? { opacity: 0, y: -6, filter: "blur(4px)" } : { opacity: 0, y: -4 }}
-                    transition={{ duration: 0.18, ease: EASE }}
-                  >
-                    <h1
-                      className={`font-semibold tracking-[-0.025em] text-texto ${
-                        texto.grande ? "text-[clamp(3rem,10vw,5.6rem)] font-bold leading-[0.98] tracking-[-0.04em]" : "text-[clamp(1.55rem,3.6vw,2.3rem)] leading-tight"
-                      }`}
-                    >
-                      {texto.titulo}
-                    </h1>
-                    <p className="mt-2 text-balance text-[clamp(1rem,2vw,1.25rem)] leading-snug text-texto-2">
-                      {texto.detalle && <span className="mr-2.5 inline-block rounded-full bg-white/12 px-2.5 py-0.5 align-[0.08em] text-[0.82em] font-medium text-texto">{texto.detalle}</span>}
-                      {texto.sub}
-                    </p>
-                  </motion.div>
-                </AnimatePresence>
-              </motion.div>
+              <Tarjeta
+                texto={texto}
+                tono={resultadoVisible ? resultado?.tono : sinCamara ? "error" : undefined}
+                sobrio={sobrio}
+                izquierda={lado}
+                resultado={resultadoVisible}
+              />
             </motion.div>
           )}
         </AnimatePresence>

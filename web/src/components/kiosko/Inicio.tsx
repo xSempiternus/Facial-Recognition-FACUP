@@ -38,7 +38,7 @@ export default function Inicio({ titulo, sub }: { titulo: string; sub: string })
             <h1 className="max-w-[14ch] text-[clamp(2.8rem,8vw,6rem)] font-semibold leading-[0.95] tracking-[-0.035em] text-texto">
               {titulo}
             </h1>
-            <p className="mt-4 max-w-[34ch] text-[clamp(1.1rem,2.2vw,1.5rem)] leading-snug text-texto/70">{sub}</p>
+            <p className="mt-4 max-w-[34ch] [text-wrap:balance] text-[clamp(1.1rem,2.2vw,1.5rem)] leading-snug text-texto/70">{sub}</p>
           </motion.div>
         </AnimatePresence>
       </div>

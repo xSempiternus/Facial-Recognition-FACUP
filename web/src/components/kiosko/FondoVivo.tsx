@@ -18,12 +18,14 @@ const EASE = [0.22, 1, 0.36, 1] as const;
 
 export type ModoFondo = "inicio" | "escaneo" | "resultado" | "exito";
 
-const ASPECTO: Record<ModoFondo, { filter: string; scale: number }> = {
-  inicio: { filter: "blur(0px) brightness(0.62) saturate(0.8) contrast(1.06)", scale: 1 },
-  escaneo: { filter: "blur(30px) brightness(0.5) saturate(1.35) contrast(1)", scale: 1.14 },
-  resultado: { filter: "blur(24px) brightness(0.4) saturate(1.1) contrast(1)", scale: 1.16 },
-  // Al reconocer, la cancha se enciende: la foto vuelve casi nítida y luminosa tras el cristal.
-  exito: { filter: "blur(5px) brightness(0.78) saturate(1.2) contrast(1.05)", scale: 1.04 },
+const ASPECTO: Record<ModoFondo, { filter: string; scale: number; opacity: number }> = {
+  // Inicio: la foto, luminosa y viva (no turbia).
+  inicio: { filter: "blur(0px) brightness(0.9) saturate(1.2) contrast(1.05)", scale: 1, opacity: 1 },
+  // Escaneo: la foto casi se disuelve en la aurora, que es lo que el cristal refracta.
+  escaneo: { filter: "blur(14px) brightness(1.05) saturate(1.6) contrast(1)", scale: 1.1, opacity: 0.22 },
+  resultado: { filter: "blur(14px) brightness(1) saturate(1.4) contrast(1)", scale: 1.12, opacity: 0.22 },
+  // Al reconocer, la cancha se enciende un poco tras el cristal.
+  exito: { filter: "blur(8px) brightness(1.1) saturate(1.5) contrast(1.04)", scale: 1.05, opacity: 0.24 },
 };
 
 // Radio de desenfoque por nivel: el blur de pantalla completa cuesta caro en GPU de teléfono.
@@ -43,7 +45,12 @@ export default function FondoVivo({ seguimiento, modo }: { seguimiento: Seguimie
     <motion.div
       className="absolute inset-0 overflow-hidden [will-change:filter,transform]"
       initial={false}
-      animate={{ ...ASPECTO[modo], filter: conBlur(ASPECTO[modo].filter, BLUR_ESCALA[calidad]) }}
+      animate={{
+        ...ASPECTO[modo],
+        filter: conBlur(ASPECTO[modo].filter, BLUR_ESCALA[calidad]),
+        // Fuera del inicio la foto solo da un matiz: en gama baja se omite (queda la aurora) y en media se atenúa.
+        opacity: modo === "inicio" ? 1 : ASPECTO[modo].opacity * (calidad === "bajo" ? 0 : calidad === "medio" ? 0.6 : 1),
+      }}
       transition={{ duration: 1.1, ease: EASE }}
       aria-hidden
     >

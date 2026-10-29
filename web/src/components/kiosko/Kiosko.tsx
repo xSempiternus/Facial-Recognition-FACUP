@@ -1,22 +1,21 @@
 "use client";
 
-// Kiosko de llegada FA CUP Chile, "liquid glass": detrás, una aurora de luz verde (y las fotos 3D de FA CUP en el
-// inicio); delante, la cámara dentro de un lente con bisel de cristal y el texto en una tarjeta de cristal. Sin
-// botones: al quedarse quieto frente al lente, la foto se saca sola, la API reconoce al niño, su foto queda nítida
-// en el círculo y su nombre aparece en la tarjeta. Móvil vertical primero; también tablet y escritorio.
+// Pantalla de reconocimiento FA CUP Chile, a pantalla completa (estilo Face ID): la cámara ocupa todo el teléfono y
+// encima van el título, cuatro esquinas que encuadran la cara y la siguen, puntitos de referencia, el porcentaje de
+// "mantén la posición" y una barra de vidrio con las llegadas de hoy y "Salir". Al reconocer, la foto se congela
+// nítida, las esquinas se cierran en verde y una tarjeta de vidrio muestra el nombre. Sin botones para registrar:
+// al quedarse quieto, la foto se saca sola. En escritorio / horizontal la cámara vive en un escenario vertical (~3:4).
 
-import { AnimatePresence, motion, MotionConfig, useMotionValue } from "motion/react";
+import { AnimatePresence, motion, MotionConfig, useMotionValue, type MotionValue } from "motion/react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { desbloquearVoz, hablar } from "@/lib/voz";
 import { llegadasDeHoy, precalentar, verificar, type Verificacion } from "@/lib/api";
-import { calidadActual, iniciarCalidad, restriccionesCamara } from "./calidad";
-import type { EstadoEscaner } from "./Escaner";
+import { calidadActual, iniciarCalidad, restriccionesCamara, useCalidad } from "./calidad";
 import Aurora, { type ModoAurora } from "./Aurora";
-import FondoVivo from "./FondoVivo";
-import Inicio from "./Inicio";
-import Lente from "./Lente";
-import Mascota, { type EstadoMascota } from "./Mascota";
+import Insignia from "./Insignia";
+import Marco, { type Guia, type ModoMarco } from "./Marco";
+import { crearRastro, PUNTOS_REF, type Rastro } from "./rastro";
 import Rodillo from "./Rodillo";
 import Tarjeta, { type TextoTarjeta } from "./Tarjeta";
 import { k } from "./tiempo";
@@ -24,13 +23,12 @@ import { useRastreoCara, type Objetivo, type Postura } from "./useRastreoCara";
 
 const MOSTRAR_RESULTADO_MS = 4200;
 const ESPERA_MISMO_NIÑO_MS = 6000; // tras un resultado, no vuelve a escanear a quien sigue frente a la cámara
-const INICIO_TRAS_MS = 1500; // sin nadie cerca este tiempo → pantalla de inicio
 const EASE = [0.22, 1, 0.36, 1] as const;
+const ESCRITORIO_DESDE = 900; // ancho (px) desde el que la cámara va en un escenario centrado
 
 type Resultado = TextoTarjeta & {
   tono: "exito" | "aviso" | "error";
   sobrio?: boolean; // "ya registrado"
-  mascota: EstadoMascota;
 };
 
 // Saludos de jugador: uno por llegada, para que no suene siempre igual.
@@ -38,11 +36,11 @@ const ANIMOS = ["¡A la cancha!", "¡Hoy se juega!", "¡A jugar!", "¡Con todo h
 const animo = () => ANIMOS[Math.floor(Math.random() * ANIMOS.length)];
 
 const GUIA: Record<Postura, { titulo: string; sub: string }> = {
-  "sin-cara": { titulo: "Mira a la cámara", sub: "Tu llegada se registra sola" },
-  lejos: { titulo: "Acércate un poco", sub: "Tu cara debe llenar el círculo" },
+  "sin-cara": { titulo: "¡Registra tu llegada!", sub: "Mira a la cámara, sin prisa" },
+  lejos: { titulo: "Acércate un poco", sub: "Llena el marco con tu cara" },
   cerca: { titulo: "Aléjate un poco", sub: "Estás muy cerca de la cámara" },
-  descentrado: { titulo: "Centra tu cara", sub: "Ponla dentro del círculo" },
-  quieto: { titulo: "Mantén la posición", sub: "Te estamos reconociendo" },
+  descentrado: { titulo: "Centra tu cara", sub: "Ponla dentro del marco" },
+  quieto: { titulo: "Mantén la posición", sub: "Ya casi" },
 };
 
 function mensajeErrorCamara(e: unknown) {
@@ -64,31 +62,17 @@ function mensajeErrorCamara(e: unknown) {
   return e instanceof Error ? e.message : "No se pudo iniciar la cámara. Toca la pantalla para reintentar.";
 }
 
-// Composición según la pantalla. Vertical (teléfono, tablet parada): círculo grande arriba y tarjeta debajo.
-// Horizontal (tablet acostada, escritorio): círculo a la izquierda y tarjeta a su lado. `E` es el radio exterior
-// del lente (cámara + bisel de cristal).
-type Composicion = Objetivo & { banda: number; E: number; lado: boolean; tarjetaX: number; tarjetaY: number; tarjetaW: number };
-
-const limitar = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
-
-function componer(ancho: number, alto: number): Composicion {
-  const lado = ancho / alto > 1.25;
-  if (lado) {
-    const E = Math.min(alto * 0.36, ancho * 0.28);
-    const banda = limitar(E * 0.14, 22, 44);
-    const cx = Math.max(E + ancho * 0.05, ancho * 0.3);
-    const cy = alto * 0.54;
-    const tarjetaX = cx + E + ancho * 0.045;
-    return { cx, cy, r: E - banda, banda, E, lado, tarjetaX, tarjetaY: 0, tarjetaW: Math.min(620, ancho - tarjetaX - ancho * 0.05) };
-  }
-  const E = Math.min(ancho * 0.455, alto * 0.28);
-  const banda = limitar(E * 0.15, 22, 44);
-  const hueco = Math.max(18, alto * 0.028);
-  // El conjunto (lente + tarjeta, ~210 px) se centra bajo la barra superior, un poco por encima del centro óptico.
-  const libre = alto - 76 - (2 * E + hueco + 210);
-  const cy = 76 + Math.max(0, libre * 0.42) + E;
-  const tarjetaW = Math.min(560, ancho - 32);
-  return { cx: ancho / 2, cy, r: E - banda, banda, E, lado, tarjetaX: (ancho - tarjetaW) / 2, tarjetaY: cy + E + hueco, tarjetaW };
+// Composición del escenario (px del propio escenario). `guia` es el óvalo de reposo de los brackets; `objetivo` es el
+// círculo equivalente que usa el rastreo para decidir lejos / cerca / descentrado (misma lógica de siempre).
+function componer(w: number, h: number): { guia: Guia; objetivo: Objetivo } {
+  // Entre el título (arriba) y la tarjeta + barra (abajo) queda el hueco donde vive el marco, centrado.
+  const arriba = 138;
+  const reserva = w >= 500 ? 335 : 305;
+  const libre = Math.max(200, h - reserva - arriba);
+  const gh = Math.min(h * 0.4, w * 0.8, libre / 1.12);
+  const cx = w / 2;
+  const cy = arriba + libre / 2;
+  return { guia: { cx, cy, w: gh * 0.78, h: gh }, objetivo: { cx, cy, r: gh * 0.68 } };
 }
 
 // Tamaño de la ventana como estado externo (se actualiza al redimensionar).
@@ -97,7 +81,7 @@ const suscribirResize = (avisar: () => void) => {
   return () => window.removeEventListener("resize", avisar);
 };
 const tamañoActual = () => `${window.innerWidth}x${window.innerHeight}`;
-const tamañoServidor = () => "1366x768";
+const tamañoServidor = () => "390x844";
 
 function useTamañoPantalla() {
   const [ancho, alto] = useSyncExternalStore(suscribirResize, tamañoActual, tamañoServidor).split("x").map(Number);
@@ -110,34 +94,31 @@ function aResultado(v: Verificacion): { resultado: Resultado; frase: string | nu
     const horaReg = v.registradoALas?.slice(11, 16);
     if (v.yaRegistrado) {
       return {
-        resultado: {
-          tono: "exito", sobrio: true, titulo: nombre, grande: true, detalle: v.categoria, saludo: "Ya estabas registrado",
-          hora: horaReg ? `Hoy a las ${horaReg}` : "Hoy", mascota: "de_nuevo",
-        },
+        resultado: { tono: "exito", sobrio: true, titulo: nombre, grande: true, detalle: v.categoria, hora: horaReg ? `Hoy a las ${horaReg}` : "Hoy" },
         frase: `¡Hola de nuevo, ${nombre}!`,
       };
     }
     const ahora = new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
     return {
-      resultado: { tono: "exito", titulo: nombre, grande: true, detalle: v.categoria, saludo: animo(), hora: `Llegada ${ahora}`, mascota: "celebra" },
+      resultado: { tono: "exito", titulo: nombre, grande: true, detalle: v.categoria, saludo: animo(), hora: `Llegada ${ahora}` },
       frase: `¡Hola, ${nombre}! ¡A jugar!`,
     };
   }
   switch (v.codigo) {
     case "sin_rostro":
-      return { resultado: { tono: "aviso", titulo: "No detectamos tu cara", sub: "Mira de frente a la cámara, con buena luz", mascota: "no_veo" }, frase: "No detectamos tu cara. Prueba otra vez." };
+      return { resultado: { tono: "aviso", titulo: "No detectamos tu cara", sub: "Mira de frente a la cámara, con buena luz" }, frase: "No detectamos tu cara. Prueba otra vez." };
     case "foto_falsa":
-      return { resultado: { tono: "aviso", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara", mascota: "foto_falsa" }, frase: "Usa tu cara, no una foto." };
+      return { resultado: { tono: "aviso", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara" }, frase: "Usa tu cara, no una foto." };
     case "no_reconocido":
-      return { resultado: { tono: "aviso", titulo: "No te reconocimos", sub: "Intenta de nuevo o avisa a tu entrenador", mascota: "no_reconoce" }, frase: "No te reconocimos. Intenta de nuevo o avisa a tu entrenador." };
+      return { resultado: { tono: "aviso", titulo: "No te reconocimos", sub: "Intenta de nuevo o avisa a tu entrenador" }, frase: "No te reconocimos. Intenta de nuevo o avisa a tu entrenador." };
     case "sin_jugadores":
-      return { resultado: { tono: "error", titulo: "Aún no hay jugadores inscritos", sub: "El staff debe inscribirlos primero", mascota: "error" }, frase: null };
+      return { resultado: { tono: "error", titulo: "Aún no hay jugadores inscritos", sub: "El staff debe inscribirlos primero" }, frase: null };
     default:
-      return { resultado: { tono: "error", titulo: "Sistema no disponible", sub: "Avisa al staff", mascota: "error" }, frase: null };
+      return { resultado: { tono: "error", titulo: "Sistema no disponible", sub: "Avisa al staff" }, frase: null };
   }
 }
 
-// Vista previa de estados para diseño/QA: ?demo=reconocido|ya|noreconoce|sinrostro|error|escaneando.
+// Vista previa de estados para diseño/QA: ?demo=buscando|alinear|escaneando|reconocido|ya|noreconoce|sinrostro|error|camara.
 // Solo existe fuera de producción; en producción el parámetro se ignora.
 const suscribirNada = () => () => {};
 const demoActual = () => (process.env.NODE_ENV === "production" ? "" : new URLSearchParams(window.location.search).get("demo") ?? "");
@@ -152,14 +133,51 @@ const DEMO_VERIFICACION: Record<string, Verificacion> = {
   error: { ok: false, codigo: "error_servidor", mensaje: "" },
 };
 
-export default function Kiosko() {
-  const demo = useDemo();
-  const video = useRef<HTMLVideoElement>(null);
-  const progreso = useMotionValue(0);
+// Demo: la cara de un niño de campeones.jpg (1409 px de ancho), centrada en el óvalo guía. Los puntos están medidos
+// sobre la captura de referencia (guía de 312 px de alto centrada en 195,363) y escalan con el alto de la guía.
+const DEMO_FOTO = { ancho: 1409, cx: 1105.5, cy: 480, alto: 56 }; // punto de la foto que cae en el centro de la guía
+const REF = { cx: 195, cy: 363, h: 312 };
+// En el orden de PUNTOS_REF, en px de la captura de referencia.
+const DEMO_PUNTOS: [number, number][] = [
+  [100, 322], [158, 325], [130, 314], [130, 332], // ojo izquierdo de la imagen
+  [205, 325], [268, 322], [235, 314], [235, 332], // ojo derecho
+  [178, 368], [182, 330], [160, 376], [200, 376], // nariz
+  [155, 408], [235, 408], [195, 402], [195, 422], // boca
+  [192, 478], [95, 375], [290, 380], [190, 255], // mentón, laterales, frente
+];
+const DEMO_CAJA = { x0: 95, y0: 255, x1: 290, y1: 482 };
+const DEMO_SIN_CARA = new Set(["buscando", "error", "camara"]);
 
+// Número 0..100 que sigue al progreso escribiendo directo en el DOM (sin setState por cuadro).
+function Porcentaje({ progreso }: { progreso: MotionValue<number> }) {
+  const el = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const poner = (v: number) => {
+      if (el.current) el.current.textContent = String(Math.round(v * 100));
+    };
+    poner(progreso.get());
+    return progreso.on("change", poner);
+  }, [progreso]);
+  return <span ref={el} className="inline-block w-[2.05ch] text-right">0</span>;
+}
+
+export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
+  const demo = useDemo();
+  const enDemo = demo !== "";
+  const video = useRef<HTMLVideoElement>(null);
+  const escenario = useRef<HTMLDivElement>(null);
+  const progreso = useMotionValue(0);
+  const calidad = useCalidad();
+  const [rastroInicial] = useState(crearRastro);
+  const rastro = useRef<Rastro>(rastroInicial);
+
+  // Geometría: pantalla completa en teléfono; escenario vertical (~3:4, 92 % del alto) en escritorio u horizontal.
   const { ancho, alto } = useTamañoPantalla();
-  const comp = useMemo(() => componer(ancho, alto), [ancho, alto]);
-  const circulo = useMemo<Objetivo>(() => ({ cx: comp.cx, cy: comp.cy, r: comp.r }), [comp]);
+  const escritorio = ancho >= ESCRITORIO_DESDE;
+  const sh = escritorio ? Math.round(alto * 0.92) : alto;
+  const sw = escritorio ? Math.min(Math.round(sh * 0.75), ancho - 32) : ancho;
+  const comp = useMemo(() => componer(sw, sh), [sw, sh]);
+  const { guia, objetivo: circulo } = comp;
   const objetivo = useRef<Objetivo>(circulo); // el bucle de rastreo lo lee cada cuadro
   useEffect(() => {
     objetivo.current = circulo;
@@ -171,7 +189,7 @@ export default function Kiosko() {
   const [resultadoReal, setResultado] = useState<Resultado | null>(null);
   const [hoy, setHoy] = useState<number | null>(null);
   const [esperarSalida, setEsperarSalida] = useState(false);
-  const [fotoUrl, setFotoUrl] = useState<string | null>(null); // foto capturada, para mostrarla nítida en el círculo
+  const [fotoUrl, setFotoUrl] = useState<string | null>(null); // foto capturada, para mostrarla nítida a pantalla completa
   const [repetir, setRepetir] = useState(0); // solo demo: tocar la pantalla repite la secuencia
   const voz = useRef(true);
   const prueba = useRef(false);
@@ -306,7 +324,7 @@ export default function Kiosko() {
     if (pendiente.current !== ctl) return; // cancelada o reemplazada
     const { resultado, frase } = aResultado(v);
     setFotoUrl(URL.createObjectURL(foto));
-    // El contador sube cuando la secuencia de éxito llega a la esquina: el rodillo se ve, no pasa de golpe.
+    // El contador sube cuando la secuencia de éxito avanza: el rodillo se ve, no pasa de golpe.
     if (v.ok && !v.yaRegistrado) {
       clearTimeout(subeContador.current);
       subeContador.current = setTimeout(() => setHoy((n) => (n === null ? n : n + 1)), 900 * k());
@@ -316,23 +334,18 @@ export default function Kiosko() {
     if (frase && voz.current) hablar(frase);
   }, []);
 
-  // Dónde está la cara de quien mira (la foto 3D de inicio la sigue).
-  const caraX = useMotionValue(0);
-  const caraY = useMotionValue(0);
-  const caraPresente = useMotionValue(0);
-  const seguimiento = useMemo(() => ({ x: caraX, y: caraY, presente: caraPresente }), [caraX, caraY, caraPresente]);
-
   const { listo: listoReal, error: errorModeloReal, postura: posturaReal } = useRastreoCara({
     video,
     objetivo,
     progreso,
-    activo: faseReal === "escaneando" && !esperarSalida,
+    activo: faseReal === "escaneando" && !esperarSalida && !enDemo, // en demo el rastreo no pisa el progreso ni los puntos simulados
     intento,
     onCaptura: alCapturar,
     onCapturando: alCapturando,
     onCapturaFallida: alFallarCaptura,
     mantenerAnillo: faseReal === "enviando",
-    seguimiento,
+    escenario,
+    rastro: enDemo ? undefined : rastro,
   });
 
   useEffect(() => {
@@ -353,15 +366,40 @@ export default function Kiosko() {
 
   // Vista previa (solo desarrollo): fuerza fase/resultado/postura sin cámara.
   const demoResultado = useMemo(() => (demo && DEMO_VERIFICACION[demo] ? aResultado(DEMO_VERIFICACION[demo]).resultado : null), [demo]);
-  const enDemo = demo !== "";
   const fase = demoResultado ? "resultado" : faseReal;
   const resultado = demoResultado ?? resultadoReal;
   const listo = enDemo || listoReal;
   const errorModelo = enDemo ? null : errorModeloReal;
-  const postura: Postura = demo === "escaneando" ? "quieto" : demo === "inicio" ? "sin-cara" : enDemo ? "cerca" : posturaReal;
+  const postura: Postura = demo === "escaneando" ? "quieto" : demo === "buscando" ? "sin-cara" : demo === "alinear" ? "descentrado" : enDemo ? "quieto" : posturaReal;
   useEffect(() => {
     if (demo === "escaneando") progreso.set(0.62);
   }, [demo, progreso]);
+
+  // Demo: la cara de ejemplo (recorte de campeones.jpg) ocupa el óvalo guía; los puntos y la caja simulados caen sobre ella.
+  const demoConCara = enDemo && !DEMO_SIN_CARA.has(demo);
+  const demoDesvio = demo === "alinear" ? { x: sw * 0.11, y: -sh * 0.025 } : { x: 0, y: 0 };
+  const demoEscala = (guia.h * 0.86) / DEMO_FOTO.alto; // px de pantalla por px de la foto
+  useEffect(() => {
+    const R = rastro.current;
+    if (!enDemo) return;
+    R.hay = demoConCara;
+    R.fija = true;
+    R.espejo = false;
+    R.ancho = sw;
+    R.alto = sh;
+    R.t = performance.now();
+    if (!demoConCara) return;
+    const aX = (x: number) => (guia.cx + demoDesvio.x + ((x - REF.cx) / REF.h) * guia.h) / sw;
+    const aY = (y: number) => (guia.cy + demoDesvio.y + ((y - REF.cy) / REF.h) * guia.h) / sh;
+    for (let i = 0; i < PUNTOS_REF.length; i++) {
+      R.pts[i * 2] = aX(DEMO_PUNTOS[i][0]);
+      R.pts[i * 2 + 1] = aY(DEMO_PUNTOS[i][1]);
+    }
+    R.caja.x0 = aX(DEMO_CAJA.x0);
+    R.caja.x1 = aX(DEMO_CAJA.x1);
+    R.caja.y0 = aY(DEMO_CAJA.y0);
+    R.caja.y1 = aY(DEMO_CAJA.y1);
+  }, [enDemo, demoConCara, demoDesvio.x, demoDesvio.y, guia.cx, guia.cy, guia.h, sw, sh]);
 
   // Demo: contador de ejemplo (11) que sube a 12 con el rodillo al reconocer; tocar la pantalla repite la secuencia.
   const [demoHoy, setDemoHoy] = useState(11);
@@ -392,218 +430,234 @@ export default function Kiosko() {
     return () => clearTimeout(id);
   }, [esperarSalida, postura]);
 
-  // Pantalla de inicio: cuando no hay nadie cerca por un momento (sin parpadeos si alguien pasa rápido).
-  const lejos = postura === "sin-cara" || postura === "lejos";
-  const [inicioArmado, setInicioArmado] = useState(true);
-  useEffect(() => {
-    const id = setTimeout(() => setInicioArmado(lejos), lejos ? INICIO_TRAS_MS : 0);
-    return () => clearTimeout(id);
-  }, [lejos]);
-
   const sinCamara = enDemo ? demo === "camara" : Boolean(errorCamara || errorModelo);
-  const mostrarInicio = !sinCamara && fase === "escaneando" && !esperarSalida && (!listo || (lejos && inicioArmado));
-
-  // Qué dice la pantalla y de qué color va el anillo.
-  let texto: TextoTarjeta;
-  let estado: EstadoEscaner;
-  if (sinCamara) {
-    texto = {
-      titulo: errorCamara ? "Cámara no disponible" : "Reconocimiento no disponible",
-      sub: errorCamara ?? errorModelo ?? "No se pudo iniciar el reconocimiento. Avisa al staff.",
-    };
-    estado = "error";
-  } else if (fase === "resultado" && resultado) {
-    texto = resultado;
-    estado = resultado.tono;
-  } else if (fase === "enviando") {
-    texto = { titulo: "Verificando…", sub: "Un momento" };
-    estado = "verificando";
-  } else if (esperarSalida && postura !== "sin-cara") {
-    texto = { titulo: "Listo", sub: "Puede pasar el siguiente" };
-    estado = "espera";
-  } else {
-    texto = GUIA[postura];
-    estado = postura === "quieto" ? "quieto" : postura === "sin-cara" ? "espera" : "ajustando";
-  }
-  if (enDemo && demo === "camara") {
-    texto = { titulo: "Cámara no disponible", sub: "Permite el acceso a la cámara en el navegador y toca la pantalla para reintentar." };
-    estado = "error";
-  }
-  const textoInicio = !listo
-    ? { titulo: "Preparando", sub: "Un momento" }
-    : postura !== "sin-cara" // hay alguien: se mantiene mientras la foto se abre hacia la cámara
-      ? { titulo: "Acércate a la pantalla", sub: "Tu llegada se registra sola" }
-      : { titulo: "Bienvenido", sub: "Acércate a la pantalla para registrar tu llegada" };
-
-  const resultadoVisible = fase === "resultado";
-  const exito = resultadoVisible && resultado?.tono === "exito";
+  const resultadoVisible = fase === "resultado" && Boolean(resultado);
+  const tono = resultado?.tono;
+  const exito = resultadoVisible && tono === "exito";
   const sobrio = exito && Boolean(resultado?.sobrio);
+  const hayError = sinCamara || (resultadoVisible && tono === "error");
   const T = k();
 
-  // Foto del niño nítida en el círculo (cuadro capturado; en demo, un recorte de campeones.jpg).
-  const mostrarFoto = resultadoVisible && resultado?.tono !== "error" && (enDemo ? demo !== "error" : Boolean(fotoUrl));
-  const hayError = sinCamara || (resultadoVisible && resultado?.tono === "error");
-  const modoAurora: ModoAurora = hayError
+  // Texto de arriba (guía) y tarjeta de abajo (resultado).
+  const cartaTexto: TextoTarjeta | null = sinCamara
+    ? {
+        titulo: errorCamara || demo === "camara" ? "Cámara no disponible" : "Reconocimiento no disponible",
+        sub: errorCamara ?? errorModelo ?? "Permite el acceso a la cámara en el navegador y toca la pantalla para reintentar.",
+      }
+    : resultadoVisible
+      ? resultado
+      : null;
+  let arriba: { titulo: string; sub: string };
+  if (sinCamara || (resultadoVisible && tono === "error")) arriba = { titulo: "Hay un problema", sub: "Avisa al staff" };
+  else if (resultadoVisible && tono === "aviso") arriba = { titulo: "Intenta de nuevo", sub: "Mira de frente, con buena luz" };
+  else if (exito) arriba = sobrio ? { titulo: "Ya estabas registrado", sub: "Tu llegada de hoy ya estaba lista" } : { titulo: "¡Llegada registrada!", sub: "Bienvenido a FA CUP" };
+  else if (fase === "enviando") arriba = { titulo: "Casi listo", sub: "Un momento" };
+  else if (!listo) arriba = { titulo: "Preparando la cámara", sub: "Un momento" };
+  else if (esperarSalida && postura !== "sin-cara") arriba = { titulo: "Listo", sub: "Puede pasar el siguiente" };
+  else arriba = GUIA[postura];
+
+  const mostrarPorcentaje = !sinCamara && !resultadoVisible && (fase === "enviando" || (postura === "quieto" && !esperarSalida && listo));
+  const modoMarco: ModoMarco = hayError
     ? "error"
     : resultadoVisible
-      ? resultado?.tono === "aviso"
+      ? tono === "aviso"
         ? "aviso"
-        : "exito"
-      : mostrarInicio
-        ? "inicio"
-        : "escaneo";
+        : sobrio
+          ? "ya"
+          : "exito"
+      : fase === "enviando"
+        ? "verifica"
+        : postura === "quieto" && !esperarSalida
+          ? "quieto"
+          : "busca";
+  const modoAurora: ModoAurora = hayError ? "error" : resultadoVisible ? (tono === "aviso" ? "aviso" : "exito") : "escaneo";
 
-  const { cx, cy, r, banda, lado } = comp;
-  const demoCamara = enDemo && demo !== "camara" && demo !== "inicio" && demo !== "error";
-  // Demo: recorte de campeones.jpg (1408 px de ancho) centrado en la cara de un niño, con la cara ocupando ~55% del círculo.
-  const kk = (r * 2 * 0.55 * 1.0) / 92;
-  const recorte: React.CSSProperties = {
-    left: cx - r,
-    top: cy - r,
-    width: r * 2,
-    height: r * 2,
-    backgroundImage: "url(/inicio/campeones.jpg)",
-    backgroundSize: `${1408 * kk}px auto`,
-    backgroundPosition: `${r - 1095 * kk}px ${r - 478 * kk}px`,
-  };
-  const filtroFoto = resultado?.tono === "aviso" ? "saturate(0.7) brightness(0.8)" : "brightness(1.08) saturate(1.1)";
+  // Foto del niño nítida a pantalla completa (cuadro capturado; en demo, el recorte de campeones.jpg).
+  const mostrarFoto = resultadoVisible && tono !== "error" && (enDemo ? demo !== "error" : Boolean(fotoUrl));
+  const demoFondo = enDemo && demo !== "camara" && demo !== "error";
+  const fotoDemo: React.CSSProperties = demoConCara
+    ? {
+        backgroundImage: "url(/inicio/campeones.jpg)",
+        backgroundSize: `${DEMO_FOTO.ancho * demoEscala}px auto`,
+        backgroundPosition: `${guia.cx + demoDesvio.x - DEMO_FOTO.cx * demoEscala}px ${guia.cy + demoDesvio.y - DEMO_FOTO.cy * demoEscala}px`,
+        backgroundRepeat: "no-repeat",
+      }
+    : { backgroundImage: "url(/inicio/campeones.jpg)", backgroundSize: "cover", backgroundPosition: "18% 55%" };
+  const filtroFoto = tono === "aviso" ? "saturate(0.75) brightness(0.9)" : "brightness(1.06) saturate(1.08)";
+  const blur = calidad !== "bajo";
 
   return (
     <MotionConfig reducedMotion="user">
       <main
-        className="relative h-dvh w-full overflow-hidden bg-fondo"
+        className="relative flex h-dvh w-full items-center justify-center overflow-hidden bg-fondo"
         onClick={() => {
           if (resultadoVisible && prueba.current) terminarResultado();
           else if (enDemo) setRepetir((n) => n + 1);
         }}
       >
-        {/* Aurora: la luz que el cristal refracta. Encima, las fotos 3D de FA CUP (nítidas en el inicio). */}
-        <Aurora modo={modoAurora} />
-        <FondoVivo seguimiento={seguimiento} modo={mostrarInicio ? "inicio" : exito ? "exito" : resultadoVisible ? "resultado" : "escaneo"} />
-        <div className="grano" aria-hidden />
-        <div className="vineta" aria-hidden />
+        {/* Escritorio: aurora y vidrio alrededor del escenario. En teléfono la cámara lo cubre todo. */}
+        {escritorio && (
+          <>
+            <Aurora modo={modoAurora} />
+            <div className="grano" aria-hidden />
+            <div className="vineta" aria-hidden />
+          </>
+        )}
 
-        {/* Lente: cámara + bisel de cristal + marcas. Al salir del inicio se acerca desde atrás. */}
-        <motion.div
-          key={`lente${repetir}`}
-          className="absolute inset-0"
-          style={{ transformOrigin: `${cx}px ${cy}px` }}
-          initial={false}
-          animate={mostrarInicio ? { opacity: 0, scale: 0.86 } : { opacity: 1, scale: 1 }}
-          transition={mostrarInicio ? { duration: 0.5, ease: EASE } : { type: "spring", stiffness: 140, damping: 22 }}
-        >
-          {/* Temblor suave del aviso (ámbar): 2 ciclos, amplitud 6 px */}
-          <motion.div
-            className="absolute inset-0"
-            initial={estado === "aviso" ? { x: 0 } : false}
-            animate={estado === "aviso" ? { x: [0, -6, 6, -6, 6, 0] } : { x: 0 }}
-            transition={estado === "aviso" ? { duration: 0.9 * T, delay: 0.25 * T, ease: "easeInOut" } : { duration: 0.2 }}
-          >
-            {/* Cámara: solo dentro del círculo (clip-path, más barato que una máscara sobre video en vivo), en espejo. */}
-            <div className="absolute inset-0" style={{ clipPath: `circle(${r}px at ${cx}px ${cy}px)` }}>
-              {/* El espejo va en el video, no en el recorte: así el círculo queda donde está aunque no esté centrado. */}
-              <video ref={video} autoPlay muted playsInline disablePictureInPicture className="absolute inset-0 h-full w-full -scale-x-100 object-cover" />
-            </div>
-            {/* Demo: recorte de una foto de FA CUP donde iría la cámara */}
-            {demoCamara && <div className="absolute rounded-full" style={recorte} />}
-            {/* Foto capturada: nítida y brillante, con el mismo encuadre que la cámara. Sin capas que la oscurezcan. */}
-            <AnimatePresence>
-              {mostrarFoto && (
+        <div ref={escenario} className="reco-escenario" data-escritorio={escritorio ? "" : undefined} style={{ width: sw, height: sh }}>
+          {sinCamara && <Aurora modo="error" />}
+
+          {/* Cámara a sangre, en espejo (cámara frontal) */}
+          <video
+            ref={video}
+            autoPlay
+            muted
+            playsInline
+            disablePictureInPicture
+            className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
+            style={{ opacity: sinCamara ? 0 : 1 }}
+          />
+          {/* Demo: recorte de una foto de FA CUP donde iría la cámara */}
+          {demoFondo && <div className="absolute inset-0" style={{ ...fotoDemo, filter: demo === "buscando" ? "brightness(.85)" : undefined }} />}
+
+          {/* Foto capturada: congelada, nítida y brillante, con el mismo encuadre que la cámara. Sin velo oscuro. */}
+          <AnimatePresence>
+            {mostrarFoto && (
+              <motion.div
+                key={`foto${repetir}`}
+                className="absolute inset-0"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0, transition: { duration: 0.35 } }}
+                transition={{ duration: 0.3 * T, ease: "easeOut" }}
+              >
                 <motion.div
-                  key={`foto${repetir}`}
                   className="absolute inset-0"
-                  style={{ clipPath: `circle(${r}px at ${cx}px ${cy}px)` }}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0, transition: { duration: 0.35 } }}
-                  transition={{ duration: 0.28 * T, ease: "easeOut" }}
+                  style={{ transformOrigin: `${guia.cx}px ${guia.cy}px` }}
+                  initial={{ scale: 1.045 }}
+                  animate={{ scale: 1 }}
+                  transition={{ duration: 1.2 * T, ease: EASE }}
                 >
-                  <motion.div
-                    className="absolute inset-0"
-                    style={{ transformOrigin: `${cx}px ${cy}px` }}
-                    initial={{ scale: 1.07 }}
-                    animate={{ scale: 1 }}
-                    transition={{ duration: 1.1 * T, ease: EASE }}
-                  >
-                    {enDemo || !fotoUrl ? (
-                      <div className="absolute rounded-full" style={{ ...recorte, filter: filtroFoto }} />
-                    ) : (
-                      // eslint-disable-next-line @next/next/no-img-element -- objectURL local del cuadro capturado
-                      <img src={fotoUrl} alt="" className="absolute inset-0 h-full w-full -scale-x-100 object-cover" style={{ filter: filtroFoto }} />
-                    )}
-                  </motion.div>
+                  {enDemo || !fotoUrl ? (
+                    <div className="absolute inset-0" style={{ ...fotoDemo, filter: filtroFoto }} />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element -- objectURL local del cuadro capturado
+                    <img src={fotoUrl} alt="" className="absolute inset-0 h-full w-full -scale-x-100 object-cover" style={{ filter: filtroFoto }} />
+                  )}
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Degradados de lectura (la foto no lleva velo) */}
+          <div className="reco-velo-sup" aria-hidden />
+          <div className="reco-velo-inf" aria-hidden />
+
+          {/* Destello suave al reconocer */}
+          {exito && (
+            <motion.div
+              key={`flash${repetir}`}
+              className="pointer-events-none absolute inset-0 z-[2] bg-white"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: sobrio ? [0, 0.1, 0] : [0, 0.32, 0] }}
+              transition={{ duration: 0.7 * T, times: [0, 0.25, 1], ease: "easeOut" }}
+            />
+          )}
+
+          {/* Brackets, puntitos, onda de luz y chispas (lienzo propio, sin re-render por cuadro) */}
+          <Marco key={`marco${repetir}`} rastro={rastro} modo={modoMarco} guia={guia} ancho={sw} alto={sh} />
+
+          {/* Título y subtítulo arriba, con transiciones cortas */}
+          <header className="absolute inset-x-0 top-0 z-[4] flex flex-col items-center px-6 pt-[max(1.1rem,env(safe-area-inset-top))] text-center">
+            <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="mb-3 h-6 w-auto opacity-90 drop-shadow-[0_2px_8px_rgba(0,0,0,.45)]" />
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={arriba.titulo + arriba.sub}
+                className="flex flex-col items-center gap-1.5"
+                initial={{ opacity: 0, y: 6, filter: blur ? "blur(4px)" : "blur(0px)" }}
+                animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                exit={{ opacity: 0, y: -4, filter: blur ? "blur(4px)" : "blur(0px)" }}
+                transition={{ duration: 0.2 * T, ease: EASE }}
+              >
+                <h1 className="reco-texto max-w-[18ch] text-[clamp(1.5rem,7cqw,2.1rem)] font-semibold leading-[1.08] tracking-[-0.03em] text-white [text-wrap:balance]">
+                  {arriba.titulo}
+                </h1>
+                <p className="reco-texto max-w-[30ch] text-[clamp(0.9rem,3.8cqw,1.05rem)] leading-snug text-white/80 [text-wrap:balance]">{arriba.sub}</p>
+              </motion.div>
+            </AnimatePresence>
+          </header>
+
+          {/* Abajo: porcentaje mientras se mantiene la posición, tarjeta de vidrio con el resultado, y la barra de vidrio */}
+          <div className="absolute inset-x-0 bottom-0 z-[4] flex flex-col items-center gap-3 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            <AnimatePresence mode="popLayout" initial={false}>
+              {mostrarPorcentaje && (
+                <motion.div
+                  key="porcentaje"
+                  className="flex flex-col items-center pb-1"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6, transition: { duration: 0.15 } }}
+                  transition={{ duration: 0.25 * T, ease: EASE }}
+                >
+                  <p className="reco-texto tabular flex items-baseline text-[clamp(3.6rem,21cqw,5.8rem)] font-semibold leading-none tracking-[-0.05em] text-white">
+                    <Porcentaje progreso={progreso} />
+                    <span className="ml-1 text-[0.42em] font-medium tracking-normal text-white/80">%</span>
+                  </p>
+                  <p className="reco-texto mt-2 text-[clamp(0.9rem,3.8cqw,1.05rem)] font-medium text-white/85">
+                    {fase === "enviando" ? "Verificando…" : "Reconociendo…"}
+                  </p>
+                </motion.div>
+              )}
+              {cartaTexto && (
+                <motion.div
+                  key={`carta${repetir}`}
+                  className="relative w-full max-w-[460px] pt-7"
+                  initial={{ opacity: 0, y: 24 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 14, transition: { duration: 0.25 } }}
+                  transition={{ type: "spring", stiffness: 160, damping: 24, delay: (exito ? 0.4 : 0.1) * T }}
+                >
+                  <div className="absolute left-1/2 top-0 z-10 -translate-x-1/2">
+                    <Insignia tipo={hayError && tono !== "aviso" ? "error" : tono === "aviso" ? "aviso" : sobrio ? "ya" : "exito"} lado={56} />
+                  </div>
+                  <Tarjeta texto={cartaTexto} tono={hayError ? "error" : tono} sobrio={sobrio} resultado={resultadoVisible} insignia />
                 </motion.div>
               )}
             </AnimatePresence>
-            {/* Sin cámara o error: el círculo se atenúa un poco */}
+
+            {/* Barra de vidrio: llegadas de hoy y Salir */}
             <motion.div
-              className="pointer-events-none absolute rounded-full bg-black"
-              style={{ left: cx - r, top: cy - r, width: r * 2, height: r * 2 }}
-              initial={false}
-              animate={{ opacity: hayError ? 0.55 : 0 }}
-              transition={{ duration: 0.4, ease: EASE }}
-            />
-            <Lente key={`l${repetir}`} objetivo={circulo} banda={banda} progreso={progreso} estado={estado} sobrio={sobrio} />
-          </motion.div>
-        </motion.div>
-
-        {/* Inicio: saludo sobre el fondo vivo mientras no hay nadie cerca */}
-        <AnimatePresence>
-          {mostrarInicio && <Inicio key="inicio" titulo={textoInicio.titulo} sub={textoInicio.sub} />}
-        </AnimatePresence>
-
-        {/* Barra superior: logo y llegadas del día, discretos */}
-        <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-4 pl-[max(1rem,4vw,env(safe-area-inset-left))] pr-[max(1rem,4vw,env(safe-area-inset-right))] pt-[max(1rem,3.5vh,env(safe-area-inset-top))]">
-          <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-[clamp(28px,4.2vh,44px)] w-auto drop-shadow-[0_2px_8px_rgba(0,0,0,.45)]" />
-          {hoyMostrado !== null && (
-            <motion.p
-              className="cristal flex min-h-11 items-center gap-2.5 rounded-full px-4 py-1.5 text-[clamp(0.85rem,1.2vw,1rem)] font-medium text-texto/90"
-              initial={{ opacity: 0, y: -8 }}
+              className="cristal flex min-h-[60px] w-full max-w-[460px] items-center justify-between gap-3 py-2 pl-5 pr-2"
+              style={{ borderRadius: 30 }}
+              initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ type: "spring", stiffness: 200, damping: 24 }}
+              transition={{ type: "spring", stiffness: 200, damping: 26 }}
             >
-              <Rodillo valor={hoyMostrado} className="text-[clamp(1.3rem,2.4vw,1.8rem)] font-semibold leading-none tracking-[-0.03em] text-texto" />
-              <span className="whitespace-nowrap">{hoyMostrado === 1 ? "llegada hoy" : "llegadas hoy"}</span>
-            </motion.p>
-          )}
-        </header>
-
-        {/* Tarjeta de cristal: guía, y al reconocer, el nombre en grande. Debajo del lente en vertical, a su lado en horizontal. */}
-        <AnimatePresence>
-          {!mostrarInicio && (
-            <motion.div
-              key={`hoja${repetir}`}
-              className="absolute z-20 flex"
-              style={
-                lado
-                  ? { left: comp.tarjetaX, width: comp.tarjetaW, top: 0, bottom: 0, alignItems: "center" }
-                  : { left: comp.tarjetaX, width: comp.tarjetaW, top: comp.tarjetaY }
-              }
-              initial={{ opacity: 0, y: 24 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 16, transition: { duration: 0.3 } }}
-              transition={{ type: "spring", stiffness: 160, damping: 24, delay: exito ? 0.4 * T : 0 }}
-            >
-              <Tarjeta
-                texto={texto}
-                tono={resultadoVisible ? resultado?.tono : sinCamara ? "error" : undefined}
-                sobrio={sobrio}
-                izquierda={lado}
-                resultado={resultadoVisible}
-              />
+              <p className="flex items-center gap-2.5 text-[0.95rem] font-medium text-texto-2">
+                {hoyMostrado !== null ? (
+                  <>
+                    <Rodillo valor={hoyMostrado} className="text-[1.7rem] font-semibold leading-none tracking-[-0.03em] text-texto" />
+                    <span className="whitespace-nowrap">{hoyMostrado === 1 ? "llegada hoy" : "llegadas hoy"}</span>
+                  </>
+                ) : (
+                  <span className="text-texto-3">Llegadas de hoy</span>
+                )}
+              </p>
+              {onSalir && (
+                <button
+                  type="button"
+                  className="reco-salir"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSalir();
+                  }}
+                >
+                  Salir
+                </button>
+              )}
             </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Mascota (aparece cuando existan sus imágenes en public/mascota/) */}
-        {!mostrarInicio && (
-          <div className="absolute bottom-[5vh] left-[4vw] z-20">
-            <Mascota
-              estado={resultado?.mascota ?? (fase === "enviando" ? "buscando" : "bienvenida")}
-              tamaño={Math.round(Math.min(alto * 0.22, ancho * 0.3))}
-            />
           </div>
-        )}
+        </div>
       </main>
     </MotionConfig>
   );

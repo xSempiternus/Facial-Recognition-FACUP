@@ -22,19 +22,19 @@ const SOMBRA: Record<TipoInsignia, string> = {
   error: "rgba(200,60,56,.45)",
 };
 
-export default function Insignia({ objetivo, tipo }: { objetivo: Objetivo; tipo: TipoInsignia }) {
-  const { cx, cy, r } = objetivo;
-  const lado = Math.round(Math.min(72, Math.max(44, r * 0.36)));
-  const d = r * Math.SQRT1_2; // esquina inferior derecha, sobre el borde del círculo
+// Con `objetivo` se coloca sobre la esquina del círculo (lente). Sin él, ocupa su sitio normal en el flujo y mide
+// `lado` px: quien la usa la posiciona (p. ej. flotando sobre el borde de la tarjeta).
+export default function Insignia({ objetivo, tipo, lado: ladoFijo = 56 }: { objetivo?: Objetivo; tipo: TipoInsignia; lado?: number }) {
+  const lado = objetivo ? Math.round(Math.min(72, Math.max(44, objetivo.r * 0.36))) : ladoFijo;
+  const d = objetivo ? objetivo.r * Math.SQRT1_2 : 0; // esquina inferior derecha, sobre el borde del círculo
   const T = k();
   const trazo = { duration: 0.42 * T, delay: 0.62 * T, ease: [0.22, 1, 0.36, 1] as const };
 
   return (
     <motion.div
-      className="pointer-events-none absolute z-10 grid place-items-center rounded-full"
+      className={`pointer-events-none z-10 grid place-items-center rounded-full ${objetivo ? "absolute" : "relative"}`}
       style={{
-        left: cx + d - lado / 2,
-        top: cy + d - lado / 2,
+        ...(objetivo ? { left: objetivo.cx + d - lado / 2, top: objetivo.cy + d - lado / 2 } : null),
         width: lado,
         height: lado,
         background: FONDO[tipo],

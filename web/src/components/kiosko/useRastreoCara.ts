@@ -9,6 +9,7 @@ import type { MotionValue } from "motion/react";
 import type { Seguimiento } from "./Foto3D";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { calidadActual, type Calidad } from "./calidad";
+import { PUNTOS_REF, type Rastro } from "./rastro";
 
 export type Postura = "sin-cara" | "lejos" | "cerca" | "descentrado" | "quieto";
 export type Objetivo = { cx: number; cy: number; r: number }; // círculo central, en px de pantalla
@@ -35,6 +36,10 @@ type Opciones = {
   mantenerAnillo?: boolean;
   /** Posición de la cara en pantalla (-1..1 desde el centro) para efectos que la siguen, como la foto 3D. */
   seguimiento?: Seguimiento;
+  /** Elemento donde se ve el video (el escenario). Si no se da, es la ventana. `objetivo` va en px de ese elemento. */
+  escenario?: RefObject<HTMLElement | null>;
+  /** Recibe, en cada análisis, los puntos de referencia y la caja de la cara (normalizados), para dibujarlos. */
+  rastro?: RefObject<Rastro>;
 };
 
 const URL_MODELO_REMOTO =
@@ -42,7 +47,7 @@ const URL_MODELO_REMOTO =
 const RUTAS_MODELO = ["/models/face_landmarker.task", "/modelos/face-landmarker.task", URL_MODELO_REMOTO];
 
 export function useRastreoCara({
-  video, objetivo, progreso, activo, intento, onCaptura, onCapturando, onCapturaFallida, mantenerAnillo = false, seguimiento,
+  video, objetivo, progreso, activo, intento, onCaptura, onCapturando, onCapturaFallida, mantenerAnillo = false, seguimiento, escenario, rastro,
 }: Opciones) {
   const [listo, setListo] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -143,12 +148,43 @@ export function useRastreoCara({
       ultimoAnalisis = ahora;
 
       // El video cubre la pantalla (object-fit: cover), así que se mide en px de pantalla.
-      const W = window.innerWidth;
-      const H = window.innerHeight;
+      const esc = escenario?.current;
+      const W = esc?.offsetWidth || window.innerWidth;
+      const H = esc?.offsetHeight || window.innerHeight;
 
       const resultado = fl.detectForVideo(v, ahora);
       const puntos = resultado.faceLandmarks[0];
       hayCara = Boolean(puntos);
+
+      // Rastro para el lienzo de brackets y puntitos (se lee en su propio rAF, sin pasar por React).
+      const R = rastro?.current;
+      if (R) {
+        R.t = ahora;
+        R.hay = hayCara;
+        R.fija = false;
+        R.espejo = true;
+        R.ancho = v.videoWidth;
+        R.alto = v.videoHeight;
+        if (puntos) {
+          let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+          for (const lm of puntos) {
+            if (lm.x < x0) x0 = lm.x;
+            if (lm.x > x1) x1 = lm.x;
+            if (lm.y < y0) y0 = lm.y;
+            if (lm.y > y1) y1 = lm.y;
+          }
+          R.caja.x0 = x0;
+          R.caja.y0 = y0;
+          R.caja.x1 = x1;
+          R.caja.y1 = y1;
+          for (let i = 0; i < PUNTOS_REF.length; i++) {
+            const lm = puntos[PUNTOS_REF[i]];
+            if (!lm) continue;
+            R.pts[i * 2] = lm.x;
+            R.pts[i * 2 + 1] = lm.y;
+          }
+        }
+      }
 
       // Del espacio del video (object-fit: cover, en espejo) al de la pantalla.
       const escala = Math.max(W / v.videoWidth, H / v.videoHeight);
@@ -225,7 +261,7 @@ export function useRastreoCara({
       if (conRVFC) v0.cancelVideoFrameCallback(idCb);
       else cancelAnimationFrame(idCb);
     };
-  }, [listo, video, objetivo, progreso, seguimiento]);
+  }, [listo, video, objetivo, progreso, seguimiento, escenario, rastro]);
 
   return { listo, error, postura };
 }

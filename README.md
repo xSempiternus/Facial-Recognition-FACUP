@@ -54,7 +54,9 @@ cd web && npm install && npm run build && npm start
 **PIN del staff:** copia `config.local.example.bat` como `config.local.bat` y cambia `STAFF_PIN`.
 `iniciar.bat` lo carga solo y el archivo no se sube a git.
 
-- **Kiosko de llegada:** http://localhost:3000 (pantalla completa con F11)
+- **App web:** http://localhost:3000 (pantalla completa con F11). Abre en un **menú** con dos accesos:
+  *Registrar asistencia* (`/asistencia`, el kiosko de llegada) y *Soy admin* (`/staff`, panel del staff con PIN).
+  Salir de `/asistencia` pide el PIN del staff. `/asistencia` también abre directo para una tablet dedicada.
 - **Panel del staff:** http://localhost:8501
 - API (documentación interactiva): http://127.0.0.1:8000/docs
 

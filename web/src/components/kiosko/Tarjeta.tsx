@@ -24,6 +24,7 @@ type Props = {
   sobrio?: boolean;
   izquierda?: boolean; // alineación a la izquierda (composición horizontal)
   resultado: boolean; // hay un resultado en pantalla (la revelación espera a la foto y la onda de luz)
+  insignia?: boolean; // una insignia flota sobre el borde superior: deja espacio arriba
 };
 
 function Nombre({ texto, resultado, izquierda }: { texto: string; resultado: boolean; izquierda: boolean }) {
@@ -54,7 +55,7 @@ function Nombre({ texto, resultado, izquierda }: { texto: string; resultado: boo
   );
 }
 
-export default function Tarjeta({ texto, tono, sobrio = false, izquierda = false, resultado }: Props) {
+export default function Tarjeta({ texto, tono, sobrio = false, izquierda = false, resultado, insignia = false }: Props) {
   const alta = useCalidad() === "alto";
   const T = k();
   const clave = texto.titulo + (texto.sub ?? "") + (texto.hora ?? "");
@@ -70,7 +71,7 @@ export default function Tarjeta({ texto, tono, sobrio = false, izquierda = false
       transition={{ layout: { type: "spring", stiffness: 260, damping: 30 } }}
     >
       <span key={resultado ? clave : "guia"} className="destello" aria-hidden />
-      <div className="px-[clamp(1.25rem,6cqw,2.5rem)] py-[clamp(1.1rem,4.5cqw,1.9rem)]">
+      <div className={`px-[clamp(1.25rem,6cqw,2.5rem)] pb-[clamp(1.1rem,4.5cqw,1.9rem)] ${insignia ? "pt-[clamp(2.1rem,9cqw,2.8rem)]" : "pt-[clamp(1.1rem,4.5cqw,1.9rem)]"}`}>
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={clave}
@@ -94,7 +95,7 @@ export default function Tarjeta({ texto, tono, sobrio = false, izquierda = false
                 )}
                 <Nombre texto={texto.titulo} resultado={resultado} izquierda={izquierda} />
                 <motion.div
-                  className={`flex flex-wrap gap-x-3 gap-y-2 ${izquierda ? "justify-start" : "justify-center"} items-center`}
+                  className={`flex flex-nowrap gap-x-3 gap-y-2 ${izquierda ? "justify-start" : "justify-center"} items-center`}
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.45 * T, delay: 0.82 * T, ease: EASE }}

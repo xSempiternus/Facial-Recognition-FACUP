@@ -3,6 +3,16 @@
 Frontend del kiosko de llegada: Next.js + React + TypeScript + Tailwind v4 + Motion + MediaPipe.
 Reemplaza al kiosko de Streamlit; el panel del staff sigue en Streamlit por ahora.
 
+## Flujo de pantallas
+
+- `/` **Menú de inicio**: foto 3D de fondo y un panel de cristal con dos accesos: **Registrar asistencia** y **Soy admin**.
+- `/asistencia` **Reconocimiento facial** (el kiosko). Abre directo (tablet dedicada o PWA) sin pasar por el menú.
+  Mantiene `?voz=0`, `?prueba=1`, `?demo=` y `?calidad=`; el menú los reenvía al entrar.
+- `/staff` **Panel del staff**; si no hay sesión va a `/staff/login`.
+- **Salir de `/asistencia` exige el PIN del staff** (diálogo de cristal, valida con `POST /auth/login`); el gesto
+  "atrás" del navegador abre el mismo diálogo en vez de salir. Con el PIN correcto vuelve al menú.
+  Código en `src/components/inicio/` (`Menu.tsx`, `Asistencia.tsx`, `SalidaPin.tsx`).
+
 ## Cómo funciona
 
 Dirección visual minimal, tipo Face ID: fondo negro, la cámara solo dentro de un círculo, un anillo de marcas

@@ -1156,16 +1156,161 @@ input[type="range"].s-range {
   font-size: 22px;
   height: 48px;
 }
+/* Login: foto arriba y hoja blanca que sube sobre ella (móvil); foto a la izquierda y hoja a la derecha (ancho). */
 .s-login {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: #031412;
+}
+.s-login-foto {
+  position: relative;
+  flex: none;
+  height: 34dvh;
+  min-height: 220px;
+  overflow: hidden;
+}
+.s-login-foto img:not(.s-login-logo) {
+  object-fit: cover;
+  object-position: 50% 30%;
+}
+.s-login-foto::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgb(3 20 18 / 0.55) 0%, rgb(3 20 18 / 0.1) 45%, rgb(3 20 18 / 0.35) 100%);
+}
+.s-login-volver {
+  position: absolute;
+  z-index: 1;
+  top: max(16px, env(safe-area-inset-top));
+  left: 16px;
   display: grid;
   place-items: center;
-  padding: 16px;
-  overflow-y: auto;
-  background: radial-gradient(600px 300px at 50% 0%, color-mix(in srgb, var(--brand-strong) 14%, transparent), transparent), var(--bg);
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgb(3 20 18 / 0.4);
+  backdrop-filter: blur(10px);
 }
-.s-login .s-card {
-  width: min(380px, 100%);
+.s-login-logo {
+  position: absolute;
+  z-index: 1;
+  bottom: 44px;
+  left: 50%;
+  height: 34px;
+  width: auto;
+  transform: translateX(-50%);
+}
+.s-login-hoja {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-top: -28px;
+  padding: 32px 24px max(28px, env(safe-area-inset-bottom));
+  border-radius: 28px 28px 0 0;
+  background: #fff;
+  color: #0b1a14;
+}
+.s-login-cabecera {
+  text-align: center;
+}
+.s-login-cabecera h1 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.s-login-cabecera p {
+  margin: 8px auto 0;
+  max-width: 34ch;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #5b6b63;
+  text-wrap: balance;
+}
+.s-login-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.s-login-campo label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.s-login-campo input {
+  height: 52px;
+  padding: 0 16px;
+  border: 1px solid #e3e9e5;
+  border-radius: 6px;
+  background: #f5f8f6;
+  color: inherit;
+  font: inherit;
+  font-size: 17px;
+}
+.s-login-campo input:focus-visible {
+  outline: 2px solid #008d36;
+  outline-offset: 1px;
+  background: #fff;
+}
+.s-login-campo input[aria-invalid="true"] {
+  border-color: #d9423c;
+}
+.s-login-error {
+  margin: -6px 0 0;
+  font-size: 13px;
+  color: #c2342e;
+}
+.s-login-boton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 54px;
+  border: 0;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #006b2a 0%, #008d36 60%, #3d9b2c 100%);
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: 0 10px 22px -10px rgb(0 141 54 / 0.7);
+  transition: transform 0.16s var(--ease-suave, ease), filter 0.2s;
+}
+.s-login-boton:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.s-login-boton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (min-width: 900px) {
+  .s-login {
+    flex-direction: row;
+  }
+  .s-login-foto {
+    flex: 1;
+    height: auto;
+  }
+  .s-login-logo {
+    bottom: auto;
+    top: 42px;
+    left: 80px;
+    transform: none;
+    height: 34px;
+  }
+  .s-login-hoja {
+    flex: 0 0 min(520px, 45vw);
+    justify-content: center;
+    margin-top: 0;
+    padding: 48px;
+    border-radius: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1565,5 +1710,30 @@ input[type="range"].s-range {
   .s-link,
   .s-cmd li button {
     min-height: 44px;
+  }
+}
+
+/* Entrada del login: la hoja sube desde abajo (como un sheet de iOS) y la foto se asienta con un zoom suave. */
+@keyframes s-hoja-sube {
+  from {
+    transform: translateY(40px);
+    opacity: 0;
+  }
+}
+@keyframes s-foto-asienta {
+  from {
+    transform: scale(1.08);
+  }
+}
+.s-login-hoja {
+  animation: s-hoja-sube 0.75s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
+}
+.s-login-foto img:not(.s-login-logo) {
+  animation: s-foto-asienta 1.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .s-login-hoja,
+  .s-login-foto img:not(.s-login-logo) {
+    animation: none;
   }
 }

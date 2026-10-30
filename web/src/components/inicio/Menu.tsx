@@ -1,29 +1,42 @@
 "use client";
 
-// Pre-menú de la app: foto cinematográfica con movimiento 3D de fondo y un panel de cristal con dos accesos grandes.
+// Pre-menú de la app: foto cinematográfica con movimiento 3D de fondo, sin tarjeta, y dos accesos.
 //  - REGISTRAR ASISTENCIA -> /asistencia (reconocimiento facial). El toque desbloquea la voz y calienta la API.
-//  - SOY ADMIN -> /staff si hay sesión válida, si no /staff/login.
+//  - SOY ADMIN -> si hay sesión válida entra a /staff; si no, sube una hoja con la clave sobre la misma
+//    pantalla (misma foto, mismo logo): sin cambio de ruta, así la entrada es continua.
 
 import {
+  AnimatePresence,
   MotionConfig,
   motion,
   useMotionValue,
   type Variants,
 } from "motion/react";
-import { ScanFace, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Loader2, Lock, ScanFace, ShieldCheck } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { precalentar } from "@/lib/api";
-import { leerToken } from "@/lib/staff-api";
+import { ApiError, iniciarSesion, leerToken } from "@/lib/staff-api";
 import { desbloquearVoz } from "@/lib/voz";
 import { iniciarCalidad } from "@/components/kiosko/calidad";
 import FondoVivo from "@/components/kiosko/FondoVivo";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
+const SPRING = { type: "spring", stiffness: 210, damping: 30, mass: 0.9 } as const;
+
+type Fase = "menu" | "clave" | "saliendo";
 
 export default function Menu() {
   const router = useRouter();
+  const [fase, setFase] = useState<Fase>("menu");
+
+  // Estilo de botones (a: Apple, b: editorial, c: verde). Solo para comparar alternativas con ?btn=a|b|c.
+  const [variante, setVariante] = useState("a");
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get("btn");
+    if (v === "a" || v === "b" || v === "c") setVariante(v);
+  }, []);
 
   // Seguimiento del puntero (solo ratón): la foto se comporta como una ventana. En táctil se queda su órbita propia.
   const x = useMotionValue(0);
@@ -35,8 +48,15 @@ export default function Menu() {
     iniciarCalidad();
     router.prefetch("/asistencia");
     router.prefetch("/staff");
-    router.prefetch("/staff/login");
   }, [router]);
+
+  // Esc cierra la hoja de la clave.
+  useEffect(() => {
+    if (fase !== "clave") return;
+    const alTeclear = (e: KeyboardEvent) => e.key === "Escape" && setFase("menu");
+    window.addEventListener("keydown", alTeclear);
+    return () => window.removeEventListener("keydown", alTeclear);
+  }, [fase]);
 
   function alMover(e: React.PointerEvent) {
     if (e.pointerType !== "mouse") return;
@@ -54,62 +74,63 @@ export default function Menu() {
   }
 
   function admin() {
-    router.push(leerToken() ? "/staff" : "/staff/login");
+    if (leerToken()) entrarAlPanel();
+    else setFase("clave");
+  }
+
+  // Salida suave: la pantalla se funde a negro antes de cambiar de ruta.
+  function entrarAlPanel() {
+    setFase("saliendo");
+    window.setTimeout(() => router.push("/staff"), 380);
   }
 
   // Variantes fijas (idénticas en servidor y cliente: sin desajuste de hidratación). Con "reducir movimiento",
   // MotionConfig quita los desplazamientos y la entrada queda en un simple fundido.
-  const contenedor: Variants = { oculto: {}, visto: {} };
-  const panel: Variants = {
-    oculto: { opacity: 0, y: 28, scale: 0.97 },
+  const bloque: Variants = {
+    oculto: { opacity: 0, y: 28 },
     visto: {
       opacity: 1,
       y: 0,
-      scale: 1,
-      transition: {
-        duration: 0.8,
-        ease: EASE,
-        staggerChildren: 0.09,
-        delayChildren: 0.2,
-      },
+      transition: { duration: 0.8, ease: EASE, staggerChildren: 0.09, delayChildren: 0.2 },
     },
+    fuera: { opacity: 0, y: 24, filter: "blur(8px)", transition: { duration: 0.35, ease: EASE } },
   };
   const item: Variants = {
     oculto: { opacity: 0, y: 14, filter: "blur(6px)" },
-    visto: {
-      opacity: 1,
-      y: 0,
-      filter: "blur(0px)",
-      transition: { duration: 0.65, ease: EASE },
-    },
+    visto: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.65, ease: EASE } },
   };
 
   return (
     <MotionConfig reducedMotion="user">
-      <main
+      <motion.main
         className="menu-raiz"
+        data-btn={variante}
         onPointerMove={alMover}
         onPointerLeave={() => presente.set(0)}
+        animate={{ opacity: fase === "saliendo" ? 0 : 1 }}
+        transition={{ duration: 0.38, ease: EASE }}
       >
         <div className="absolute inset-0" aria-hidden>
           <FondoVivo seguimiento={seguimiento} modo="inicio" />
           <div className="menu-velo" />
+          {/* Al abrir la clave la foto se atenúa un poco: el foco pasa a la hoja. */}
+          <motion.div
+            className="menu-sombra"
+            initial={false}
+            animate={{ opacity: fase === "clave" ? 1 : 0 }}
+            transition={{ duration: 0.6, ease: EASE }}
+          />
         </div>
 
-        <motion.div
-          className="menu-escena"
-          variants={contenedor}
-          initial="oculto"
-          animate="visto"
-        >
-          <motion.section
-            className="cristal menu-panel"
-            aria-labelledby="menu-titulo"
-            variants={panel}
-          >
-            <span className="destello" aria-hidden />
-
-            <motion.div variants={item} className="menu-logo">
+        <div className="menu-escena">
+          {/* El logo no se mueve nunca: es el ancla que da continuidad entre el menú y la clave. */}
+          <div className="menu-logo">
+            <motion.div
+              className="h-full"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, ease: EASE, delay: 0.1 }}
+            >
               <Image
                 src="/logo-blanco.png"
                 alt="FA CUP Chile"
@@ -119,46 +140,134 @@ export default function Menu() {
                 className="h-full w-auto"
               />
             </motion.div>
+          </div>
 
-            <motion.div variants={item} className="menu-textos">
-              <h1 id="menu-titulo" className="menu-titulo">
-                Fútbol y Amistad
-              </h1>
-              <p className="menu-sub">
-                Qué bueno tenerlos hoy en la cancha. Registra la llegada de los
-                jugadores.
-              </p>
-            </motion.div>
+          <AnimatePresence initial>
+            {fase === "menu" && (
+              <motion.section
+                key="menu"
+                className="menu-panel"
+                aria-labelledby="menu-titulo"
+                variants={bloque}
+                initial="oculto"
+                animate="visto"
+                exit="fuera"
+              >
+                <motion.div variants={item} className="menu-textos">
+                  <h1 id="menu-titulo" className="menu-titulo">
+                    Fútbol
+                    <br />y Amistad
+                  </h1>
+                  <p className="menu-sub">
+                    Qué bueno tenerlos hoy en la cancha. Registra la llegada de los jugadores.
+                  </p>
+                </motion.div>
 
-            <motion.div variants={item} className="menu-acciones">
-              <button
-                type="button"
-                className="menu-boton menu-boton-primario"
-                onClick={registrar}
-              >
-                <ScanFace
-                  className="menu-icono"
-                  strokeWidth={1.75}
-                  aria-hidden
-                />
-                Registrar asistencia
-              </button>
-              <button
-                type="button"
-                className="menu-boton menu-boton-vidrio"
-                onClick={admin}
-              >
-                <ShieldCheck
-                  className="menu-icono"
-                  strokeWidth={1.75}
-                  aria-hidden
-                />
-                Soy admin
-              </button>
-            </motion.div>
-          </motion.section>
-        </motion.div>
-      </main>
+                <motion.div variants={item} className="menu-acciones">
+                  <button type="button" className="menu-boton menu-boton-primario" onClick={registrar}>
+                    <ScanFace className="menu-icono" strokeWidth={1.75} aria-hidden />
+                    Registrar asistencia
+                  </button>
+                  <button type="button" className="menu-boton menu-boton-vidrio" onClick={admin}>
+                    <ShieldCheck className="menu-icono" strokeWidth={1.75} aria-hidden />
+                    Soy admin
+                  </button>
+                </motion.div>
+              </motion.section>
+            )}
+
+            {fase !== "menu" && (
+              <HojaClave
+                key="clave"
+                visible={fase === "clave"}
+                onVolver={() => setFase("menu")}
+                onCorrecto={entrarAlPanel}
+              />
+            )}
+          </AnimatePresence>
+        </div>
+      </motion.main>
     </MotionConfig>
+  );
+}
+
+// Hoja blanca que sube desde abajo sobre la foto (como un sheet de iOS) con el campo de la clave.
+function HojaClave({
+  visible,
+  onVolver,
+  onCorrecto,
+}: {
+  visible: boolean;
+  onVolver: () => void;
+  onCorrecto: () => void;
+}) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [cargando, setCargando] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // El foco espera a que la hoja termine de subir: así el teclado del móvil no corta la animación.
+    const t = window.setTimeout(() => input.current?.focus({ preventScroll: true }), 520);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  async function enviar(e: FormEvent) {
+    e.preventDefault();
+    if (!pin || cargando) return;
+    setCargando(true);
+    setError(null);
+    try {
+      await iniciarSesion(pin);
+      onCorrecto();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "No se pudo iniciar sesión.");
+      setPin("");
+      setCargando(false);
+      input.current?.focus();
+    }
+  }
+
+  return (
+    <motion.form
+      className="menu-hoja"
+      onSubmit={enviar}
+      initial={{ y: "100%" }}
+      animate={{ y: visible ? 0 : "100%" }}
+      exit={{ y: "100%", transition: { duration: 0.4, ease: EASE } }}
+      transition={SPRING}
+    >
+      <button type="button" className="menu-hoja-volver" onClick={onVolver} aria-label="Volver">
+        <ArrowLeft size={20} aria-hidden />
+      </button>
+      <div className="menu-hoja-cabecera">
+        <h2>Panel del staff</h2>
+        <p>Ingresa tu clave para administrar jugadores, asistencia y reportes.</p>
+      </div>
+      <div className="menu-hoja-campo">
+        <label htmlFor="clave">Clave</label>
+        <input
+          id="clave"
+          ref={input}
+          type="password"
+          inputMode="text"
+          autoComplete="current-password"
+          placeholder="Ingresa la clave"
+          value={pin}
+          onChange={(e) => setPin(e.target.value)}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? "clave-error" : undefined}
+        />
+      </div>
+      {error && (
+        <p id="clave-error" role="alert" className="menu-hoja-error">
+          {error}
+        </p>
+      )}
+      <button type="submit" className="menu-hoja-boton" disabled={!pin || cargando}>
+        {cargando ? <Loader2 size={18} className="s-spin" aria-hidden /> : <Lock size={18} aria-hidden />}
+        Entrar
+      </button>
+    </motion.form>
   );
 }

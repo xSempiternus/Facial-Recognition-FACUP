@@ -369,67 +369,199 @@ body {
   inset: 0;
   background:
     radial-gradient(ellipse 90% 80% at 50% 38%, rgb(5 7 6 / 0) 35%, rgb(5 7 6 / 0.55) 100%),
-    linear-gradient(180deg, rgb(5 7 6 / 0.45) 0%, rgb(5 7 6 / 0) 24%, rgb(5 7 6 / 0) 46%, rgb(5 7 6 / 0.82) 100%);
+    linear-gradient(180deg, rgb(5 7 6 / 0.5) 0%, rgb(5 7 6 / 0) 22%, rgb(5 7 6 / 0.1) 38%, rgb(3 20 18 / 0.78) 66%, rgb(3 20 18 / 0.96) 100%);
 }
-/* Móvil: el panel queda abajo (alcance del pulgar) y la foto se luce arriba. Desde tablet: centrado. */
+/* Sin tarjeta: el texto va directo sobre la foto. Logo arriba a la izquierda; titular, bajada y accesos abajo
+   (alcance del pulgar). El velo de abajo asegura la lectura sobre cualquier zona de la foto. */
 .menu-escena {
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 1rem 1rem max(1rem, env(safe-area-inset-bottom));
-  padding-left: max(1rem, env(safe-area-inset-left));
-  padding-right: max(1rem, env(safe-area-inset-right));
-}
-@media (min-width: 600px) and (min-height: 600px) {
-  .menu-escena {
-    align-items: center;
-    padding-bottom: 2rem;
-  }
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  padding: max(1.25rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right))
+    max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
 }
 .menu-panel {
   width: 100%;
-  max-width: 440px;
-  border-radius: 36px;
-  padding: 16px;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 32px;
+  text-align: center;
+}
+@media (min-width: 900px) {
+  .menu-escena {
+    padding-bottom: 3.5rem;
+  }
+  .menu-panel {
+    max-width: 560px;
+  }
+}
+.menu-textos {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.menu-logo {
+  position: absolute;
+  top: max(1.5rem, env(safe-area-inset-top));
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  height: 32px;
+  pointer-events: none;
+}
+.menu-sombra {
+  position: absolute;
+  inset: 0;
+  background: rgb(3 20 18 / 0.45);
+}
+.s-spin {
+  animation: menu-giro 0.8s linear infinite;
+}
+@keyframes menu-giro {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Hoja de la clave: sube sobre la foto. Móvil: pegada abajo. Ancho: tarjeta blanca centrada abajo. */
+.menu-hoja {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
   gap: 20px;
+  width: min(480px, 100%);
+  margin: 0 auto;
+  padding: 28px 24px max(28px, env(safe-area-inset-bottom));
+  border-radius: 28px 28px 0 0;
+  background: #fff;
+  color: #0b1a14;
+  box-shadow: 0 -24px 60px -20px rgb(0 0 0 / 0.5);
 }
-.menu-logo {
+.menu-hoja-volver {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: grid;
+  place-items: center;
+  width: 40px;
   height: 40px;
-  padding: 8px 8px 0;
-  box-sizing: content-box;
+  border: 0;
+  border-radius: 999px;
+  background: #f0f4f1;
+  color: #0b1a14;
+  cursor: pointer;
 }
-.menu-textos {
-  padding: 0 8px;
+.menu-hoja-cabecera {
+  text-align: center;
+  padding-top: 8px;
+}
+.menu-hoja-cabecera h2 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.menu-hoja-cabecera p {
+  margin: 8px auto 0;
+  max-width: 34ch;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #5b6b63;
+  text-wrap: balance;
+}
+.menu-hoja-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.menu-hoja-campo label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.menu-hoja-campo input {
+  height: 52px;
+  padding: 0 16px;
+  border: 1px solid #e3e9e5;
+  border-radius: 12px;
+  background: #f5f8f6;
+  color: inherit;
+  font: inherit;
+  font-size: 17px;
+}
+.menu-hoja-campo input:focus-visible {
+  outline: 2px solid #008d36;
+  outline-offset: 1px;
+  background: #fff;
+}
+.menu-hoja-campo input[aria-invalid="true"] {
+  border-color: #d9423c;
+}
+.menu-hoja-error {
+  margin: -6px 0 0;
+  font-size: 13px;
+  color: #c2342e;
+}
+.menu-hoja-boton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 54px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #006b2a 0%, #008d36 60%, #3d9b2c 100%);
+  color: #fff;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 10px 22px -10px rgb(0 141 54 / 0.7);
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.menu-hoja-boton:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.menu-hoja-boton:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .menu-titulo {
-  font-size: clamp(2rem, 9vw, 2.6rem);
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.035em;
-  text-wrap: balance;
+  font-size: clamp(2.75rem, 13vw, 4.5rem);
+  font-weight: 800;
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
   color: var(--color-texto);
+  text-shadow: 0 2px 28px rgb(3 20 18 / 0.55);
 }
 .menu-sub {
-  margin-top: 12px;
-  max-width: 34ch;
+  margin-top: 18px;
+  max-width: 30ch;
   font-size: 1rem;
   line-height: 1.45;
-  text-wrap: pretty;
-  color: rgb(246 250 248 / 0.78);
+  text-wrap: balance;
+  color: rgb(246 250 248 / 0.82);
+  text-shadow: 0 1px 16px rgb(3 20 18 / 0.6);
 }
 .menu-acciones {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
 }
 @media (max-height: 520px) and (orientation: landscape) {
   .menu-panel {
     gap: 12px;
-    padding: 12px;
+  }
+  .menu-titulo {
+    font-size: 2.25rem;
   }
   .menu-sub {
     display: none;
@@ -454,7 +586,7 @@ body {
   width: 100%;
   min-height: 60px;
   padding: 0 20px;
-  border-radius: 20px;
+  border-radius: 8px;
   border: 0;
   font-family: inherit;
   font-size: 0.9375rem;
@@ -490,16 +622,13 @@ body {
   height: 24px;
   flex: none;
 }
-/* Principal: el verde de marca en cristal sólido, con borde especular y brillo lima abajo. */
+/* Principal: blanco sólido (alto contraste sobre la foto) con el verde de marca en texto e icono. */
 .menu-boton-primario {
-  background:
-    linear-gradient(180deg, rgb(255 255 255 / 0.22) 0%, rgb(255 255 255 / 0) 52%),
-    linear-gradient(135deg, #006b2a 0%, #008d36 58%, #3d9b2c 100%);
+  background: #fff;
+  color: #006b2a;
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.4),
-    inset 0 -10px 18px -10px rgb(149 193 31 / 0.55),
-    0 1px 2px rgb(0 12 8 / 0.4),
-    0 10px 24px -8px rgb(0 141 54 / 0.6);
+    0 1px 2px rgb(0 12 8 / 0.3),
+    0 12px 28px -10px rgb(0 0 0 / 0.55);
 }
 /* Secundario: cristal claro, sin color. */
 .menu-boton-vidrio {
@@ -511,7 +640,7 @@ body {
 }
 @media (hover: hover) {
   .menu-boton-primario:hover:not(:disabled) {
-    filter: brightness(1.1);
+    background: #eef6f0;
   }
   .menu-boton-vidrio:hover:not(:disabled) {
     background-color: rgb(255 255 255 / 0.1);
@@ -534,7 +663,7 @@ body {
 .menu-dialogo {
   width: 100%;
   max-width: 380px;
-  border-radius: 32px;
+  border-radius: 14px;
   padding: 20px;
   --vidrio-a: 0.72;
 }
@@ -568,7 +697,7 @@ body {
   width: 100%;
   height: 56px;
   padding: 0 16px;
-  border-radius: 16px;
+  border-radius: 6px;
   border: 0;
   font-family: inherit;
   font-size: 1.375rem; /* 16px o más: iOS no hace zoom al enfocar */
@@ -720,4 +849,81 @@ body {
   .reco-salir {
     transition: none;
   }
+}
+
+/* ───────── Transición menú -> login: el logo viaja entre pantallas, el resto se funde ───────── */
+::view-transition-group(.vt-logo) {
+  animation-duration: 0.7s;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+::view-transition-old(root) {
+  animation: vt-sale 0.35s cubic-bezier(0.4, 0, 1, 1) both;
+}
+::view-transition-new(root) {
+  animation: vt-entra 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both;
+}
+@keyframes vt-sale {
+  to {
+    opacity: 0;
+    filter: blur(6px);
+  }
+}
+@keyframes vt-entra {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+  }
+}
+
+/* ───────── Alternativas de botones del menú (?btn=a|b|c) ───────── */
+/* A · Apple: sin mayúsculas ni tracking, esquina continua de 14px, peso 600. */
+.menu-raiz[data-btn="a"] .menu-boton {
+  border-radius: 14px;
+  min-height: 56px;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: none;
+}
+/* B · Editorial: casi recto, mayúsculas finas; el secundario es solo línea. */
+.menu-raiz[data-btn="b"] .menu-boton {
+  border-radius: 2px;
+  min-height: 56px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+.menu-raiz[data-btn="b"] .menu-boton-vidrio {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.55);
+}
+.menu-raiz[data-btn="b"] .menu-icono {
+  display: none;
+}
+/* C · Verde de marca sólido; el secundario es un enlace de texto, sin caja. */
+.menu-raiz[data-btn="c"] .menu-boton {
+  border-radius: 12px;
+  min-height: 56px;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: none;
+}
+.menu-raiz[data-btn="c"] .menu-boton-primario {
+  background: linear-gradient(180deg, #0aa043 0%, #008d36 100%);
+  color: #fff;
+  box-shadow: 0 12px 28px -10px rgb(0 141 54 / 0.7);
+}
+.menu-raiz[data-btn="c"] .menu-boton-vidrio {
+  min-height: 44px;
+  background: transparent;
+  box-shadow: none;
+  color: rgb(246 250 248 / 0.85);
 }

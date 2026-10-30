@@ -1,8 +1,12 @@
+import { connection } from "next/server";
+
 const FUENTES_MODELO = [
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
 ];
 
 export async function GET() {
+  // Dinámico: se ejecuta al pedirlo, no al compilar (así el build no depende de internet).
+  await connection();
   for (const url of FUENTES_MODELO) {
     try {
       const resp = await fetch(url, { next: { revalidate: 60 * 60 * 24 } });

@@ -880,3 +880,9 @@ body {
   }
 }
 
+
+/* Móvil: área de toque mínima de 44px en el botón Volver de la hoja de clave. */
+.menu-hoja-volver {
+  width: 44px;
+  height: 44px;
+}

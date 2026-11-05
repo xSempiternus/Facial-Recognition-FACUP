@@ -84,7 +84,7 @@ async function comoError(resp: Response): Promise<ApiError> {
 function expulsar() {
   cerrarSesion();
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- recarga completa: descarta todo estado en memoria
-  if (!window.location.pathname.startsWith("/staff/login")) window.location.assign("/staff/login");
+  if (window.location.pathname !== "/") window.location.assign("/");
 }
 
 /** fetch con el token inyectado; ante 401 limpia la sesión y manda al login. */

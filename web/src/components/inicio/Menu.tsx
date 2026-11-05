@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { precalentar } from "@/lib/api";
 import { ApiError, iniciarSesion, leerToken } from "@/lib/staff-api";
+import { useAreaVisible } from "@/lib/teclado";
 import { desbloquearVoz } from "@/lib/voz";
 import { iniciarCalidad } from "@/components/kiosko/calidad";
 import FondoVivo from "@/components/kiosko/FondoVivo";
@@ -197,6 +198,9 @@ function HojaClave({
   const [error, setError] = useState<string | null>(null);
   const [cargando, setCargando] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  // Con el teclado abierto la hoja sube sobre él (visualViewport) y, si no cabe, se desplaza.
+  const area = useAreaVisible();
+  const tapado = area ? Math.max(0, window.innerHeight - (area.top + area.height)) : 0;
 
   useEffect(() => {
     // El foco espera a que la hoja termine de subir: así el teclado del móvil no corta la animación.
@@ -223,6 +227,7 @@ function HojaClave({
   return (
     <motion.form
       className="menu-hoja"
+      style={area ? { bottom: tapado, maxHeight: area.height, overflowY: "auto" } : undefined}
       onSubmit={enviar}
       initial={{ y: "100%" }}
       animate={{ y: visible ? 0 : "100%" }}
@@ -244,6 +249,9 @@ function HojaClave({
           type="password"
           inputMode="text"
           autoComplete="current-password"
+          autoCapitalize="none"
+          autoCorrect="off"
+          enterKeyHint="go"
           placeholder="Ingresa la clave"
           value={pin}
           onChange={(e) => setPin(e.target.value)}

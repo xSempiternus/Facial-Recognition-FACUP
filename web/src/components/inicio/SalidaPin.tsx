@@ -6,6 +6,7 @@
 import { animate, motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError, iniciarSesion } from "@/lib/staff-api";
+import { useAreaVisible } from "@/lib/teclado";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
@@ -17,6 +18,7 @@ export default function SalidaPin({ onCancelar, onCorrecto }: { onCancelar: () =
   const campo = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const tarjeta = useRef<HTMLDivElement>(null);
+  const area = useAreaVisible(); // con el teclado abierto el diálogo se centra en el área visible
 
   // Foco al abrir y tras cada intento fallido (el campo está deshabilitado mientras valida).
   useEffect(() => {
@@ -63,6 +65,7 @@ export default function SalidaPin({ onCancelar, onCorrecto }: { onCancelar: () =
   return (
     <motion.div
       className="menu-dialogo-fondo"
+      style={area ? { top: area.top, height: area.height, bottom: "auto" } : undefined}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: reducir ? 0.1 : 0.3, ease: EASE }}
@@ -98,6 +101,8 @@ export default function SalidaPin({ onCancelar, onCorrecto }: { onCancelar: () =
                 type="password"
                 inputMode="text"
                 autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
                 enterKeyHint="go"
                 value={pin}
                 onChange={(e) => setPin(e.target.value)}

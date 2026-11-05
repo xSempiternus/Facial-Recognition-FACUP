@@ -1,8 +1,17 @@
 "use client";
 
-import { Camera as CamIcon, CameraOff, ImageUp } from "lucide-react";
+import { Camera as CamIcon, CameraOff, ImageUp, RotateCw } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "./ui";
+
+function mensajeError(e: unknown) {
+  const n = e instanceof DOMException ? e.name : e instanceof Error ? e.message : "";
+  if (n === "NotAllowedError" || n === "SecurityError") return "Permiso de cámara denegado. Actívalo en los ajustes del navegador y toca Reintentar, o sube una foto.";
+  if (n === "NotFoundError" || n === "DevicesNotFoundError") return "No hay una cámara disponible en este equipo. Sube una foto.";
+  if (n === "NotReadableError" || n === "TrackStartError") return "La cámara está en uso por otra app. Ciérrala y toca Reintentar, o sube una foto.";
+  if (n === "sin_api") return "Este navegador no permite usar la cámara (se requiere HTTPS). Sube una foto.";
+  return "No se pudo usar la cámara. Toca Reintentar o sube una foto.";
+}
 
 const sinSuscripcion = () => () => {};
 /** Solo en desarrollo: ?demo=camara simula el visor (sin cámara real) para revisar el layout. */
@@ -31,6 +40,8 @@ export function Camara({
   const video = useRef<HTMLVideoElement>(null);
   const archivo = useRef<HTMLInputElement>(null);
   const [estadoReal, setEstado] = useState<"iniciando" | "lista" | "error">("iniciando");
+  const [textoError, setTextoError] = useState("");
+  const [intento, setIntento] = useState(0);
   const estado = demo ? "lista" : estadoReal;
 
   useEffect(() => {
@@ -41,29 +52,56 @@ export function Camara({
     (async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) throw new Error("sin_api");
-        flujo = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 1280 } },
-          audio: false,
-        });
+        let f: MediaStream;
+        try {
+          f = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 } }, audio: false });
+        } catch (e) {
+          if (e instanceof DOMException && (e.name === "OverconstrainedError" || e.name === "ConstraintNotSatisfiedError")) {
+            f = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          } else throw e;
+        }
         if (!vivo) {
-          flujo.getTracks().forEach((t) => t.stop());
+          f.getTracks().forEach((t) => t.stop());
           return;
         }
+        flujo = f;
+        // iOS suspende la cámara al ocultar la app: si el track termina estando visible, se vuelve a abrir.
+        f.getVideoTracks().forEach((t) =>
+          t.addEventListener("ended", () => vivo && document.visibilityState === "visible" && setIntento((n) => n + 1)),
+        );
         if (video.current) {
-          video.current.srcObject = flujo;
+          video.current.srcObject = f;
           await video.current.play().catch(() => {});
         }
-        setEstado("lista");
-      } catch {
-        if (vivo) setEstado("error");
+        if (vivo) {
+          setTextoError("");
+          setEstado("lista");
+        }
+      } catch (e) {
+        if (vivo) {
+          setTextoError(mensajeError(e));
+          setEstado("error");
+        }
       }
     })();
+    const alVolver = () => {
+      if (document.visibilityState !== "visible" || !flujo) return;
+      if (flujo.getVideoTracks().some((t) => t.readyState === "ended")) setIntento((n) => n + 1);
+      else video.current?.play().catch(() => {});
+    };
+    document.addEventListener("visibilitychange", alVolver);
     return () => {
       vivo = false;
+      document.removeEventListener("visibilitychange", alVolver);
       flujo?.getTracks().forEach((t) => t.stop());
       if (el) el.srcObject = null;
     };
-  }, [demo]);
+  }, [demo, intento]);
+
+  function reintentar() {
+    setEstado("iniciando");
+    setIntento((n) => n + 1);
+  }
 
   function capturar() {
     if (demo) {
@@ -94,14 +132,19 @@ export function Camara({
   return (
     <div className={fija ? "s-camwrap fija" : "s-camwrap"}>
       <div className="s-cam">
-        <video ref={video} playsInline muted aria-label="Vista de la cámara" style={{ display: estado === "lista" ? "block" : "none" }} />
+        <video ref={video} autoPlay playsInline muted aria-label="Vista de la cámara" style={{ display: estado === "lista" ? "block" : "none" }} />
         {estado === "lista" && <div className="guide" aria-hidden />}
         {demo && <div className="msg demo" aria-hidden>Vista simulada (demo)</div>}
         {estado === "iniciando" && <div className="msg">Encendiendo la cámara…</div>}
         {estado === "error" && (
           <div className="msg">
             <CameraOff size={22} aria-hidden style={{ margin: "0 auto 8px" }} />
-            No se pudo usar la cámara. Revisa el permiso del navegador o sube una foto desde el equipo.
+            {textoError || "No se pudo usar la cámara."}
+            <div style={{ marginTop: 10 }}>
+              <Button onClick={reintentar}>
+                <RotateCw size={16} aria-hidden /> Reintentar
+              </Button>
+            </div>
           </div>
         )}
       </div>

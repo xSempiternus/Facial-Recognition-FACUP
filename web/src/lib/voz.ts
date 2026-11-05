@@ -5,7 +5,11 @@ const PREFERIDAS = ["es-CL", "es-419", "es-MX", "es-US", "es-AR", "es-CO", "es-E
 export function hablar(texto: string) {
   const s = typeof window !== "undefined" ? window.speechSynthesis : undefined;
   if (!s) return;
+  let dicho = false;
   const decir = () => {
+    if (dicho) return;
+    dicho = true;
+    try {
     const u = new SpeechSynthesisUtterance(texto);
     const voces = s.getVoices();
     let voz: SpeechSynthesisVoice | undefined;
@@ -20,9 +24,16 @@ export function hablar(texto: string) {
     u.pitch = 1.15;
     s.cancel();
     s.speak(u);
+    } catch {
+      // La voz es un extra: si el navegador la bloquea, el flujo sigue en silencio.
+    }
   };
   if (s.getVoices().length) decir();
-  else s.addEventListener("voiceschanged", decir, { once: true });
+  else {
+    s.addEventListener("voiceschanged", decir, { once: true });
+    // iOS a veces nunca emite voiceschanged: se habla igual con la voz por defecto.
+    setTimeout(decir, 700);
+  }
 }
 
 /** iOS/Safari solo permite hablar tras un gesto del usuario: el primer toque desbloquea la síntesis con un enunciado vacío. */

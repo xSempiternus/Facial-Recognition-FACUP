@@ -7,7 +7,6 @@ import {
   FlaskConical,
   LayoutDashboard,
   LogOut,
-  Menu,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -15,9 +14,9 @@ import {
   TrendingUp,
   UserPlus,
   Users,
-  X,
   type LucideIcon,
 } from "lucide-react";
+import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
@@ -36,6 +35,7 @@ const NAV: Item[] = [
 ];
 
 const MIGAS: Record<string, string> = Object.fromEntries(NAV.map((n) => [n.href, n.texto]));
+const EASE = [0.22, 1, 0.36, 1] as const;
 
 function useSesion() {
   // undefined en servidor / hidratación; null = sin sesión; string = token.
@@ -72,25 +72,11 @@ export function Shell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const ruta = usePathname();
   const [colapsado, setColapsado] = usePrefColapsado();
-  const [abierto, setAbierto] = useState(false);
   const [paleta, setPaleta] = useState(false);
 
   useEffect(() => {
-    if (token === null) router.replace("/staff/login");
+    if (token === null) router.replace("/");
   }, [token, router]);
-
-  // Cierra el menú móvil al cambiar de ruta y con Esc.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- cerrar el drawer al navegar
-    setAbierto(false);
-  }, [ruta]);
-  useEffect(() => {
-    if (!abierto) return;
-    const f = (e: KeyboardEvent) => e.key === "Escape" && setAbierto(false);
-    window.addEventListener("keydown", f);
-    return () => window.removeEventListener("keydown", f);
-  }, [abierto]);
-  const toque = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const f = (e: KeyboardEvent) => {
@@ -114,61 +100,42 @@ export function Shell({ children }: { children: ReactNode }) {
     );
   }
 
-  const actual = NAV.find((n) => (n.exacto ? ruta === n.href : ruta.startsWith(n.href)));
+  const activo = (n: Item) => (n.exacto ? ruta === n.href : ruta.startsWith(n.href));
+  const actual = NAV.find(activo);
   const salir = () => {
     cerrarSesion();
-    router.replace("/staff/login");
+    router.replace("/");
   };
   const ir = (href: string) => {
     setPaleta(false);
-    setAbierto(false);
     router.push(href);
   };
 
   return (
-    <div className={clsx("s-main", "s-shell")} style={{ flexDirection: "row" }}>
-      <div className={clsx(colapsado && "s-collapsed", abierto && "s-open")} style={{ display: "contents" }}>
-        <aside
-          className="s-sidebar"
-          aria-label="Navegación del panel"
-          onTouchStart={(e) => (toque.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
-          onTouchEnd={(e) => {
-            const t = toque.current;
-            toque.current = null;
-            if (!t) return;
-            const dx = e.changedTouches[0].clientX - t.x;
-            const dy = e.changedTouches[0].clientY - t.y;
-            if (dx < -60 && Math.abs(dy) < Math.abs(dx)) setAbierto(false);
-          }}
-        >
+    <MotionConfig reducedMotion="user" transition={{ duration: 0.5, ease: EASE }}>
+      <div className={clsx("s-shell", colapsado && "s-collapsed")}>
+        <aside className="s-sidebar" aria-label="Navegación del panel">
           <div className="s-brand">
             <span className="s-logo" aria-hidden />
-            <span>FA CUP · Staff</span>
-            <button type="button" className="s-btn ghost icon s-mobile-only s-close" aria-label="Cerrar menú" onClick={() => setAbierto(false)}>
-              <X size={18} />
-            </button>
+            <span className="s-brand-t">FA CUP · Staff</span>
           </div>
-          <nav className="s-nav">
-            {NAV.map(({ href, texto, icono: I, exacto }) => (
-              <Link
-                key={href}
-                href={href}
-                className="s-link"
-                title={texto}
-                aria-current={(exacto ? ruta === href : ruta.startsWith(href)) ? "page" : undefined}
-                onClick={() => setAbierto(false)}
-              >
-                <I size={17} aria-hidden />
-                <span>{texto}</span>
-              </Link>
-            ))}
-            <div className="s-nav-sep">Próximamente</div>
-            <span className="s-link" aria-disabled="true" title="Evaluación de modelos: próximamente" style={{ cursor: "default", opacity: 0.6 }}>
-              <FlaskConical size={17} aria-hidden />
-              <span>Evaluación</span>
-              {!colapsado && <span className="soon">pronto</span>}
-            </span>
-          </nav>
+          <LayoutGroup id="side">
+            <nav className="s-nav">
+              {NAV.map((n) => (
+                <Link key={n.href} href={n.href} className="s-link" title={n.texto} aria-current={activo(n) ? "page" : undefined}>
+                  {activo(n) && <motion.span layoutId="ind-side" className="s-ind" transition={{ type: "spring", stiffness: 520, damping: 40 }} />}
+                  <n.icono size={17} aria-hidden />
+                  <span>{n.texto}</span>
+                </Link>
+              ))}
+              <div className="s-nav-sep">Próximamente</div>
+              <span className="s-link s-link-off" aria-disabled="true" title="Evaluación de modelos: próximamente">
+                <FlaskConical size={17} aria-hidden />
+                <span>Evaluación</span>
+                {!colapsado && <span className="soon">pronto</span>}
+              </span>
+            </nav>
+          </LayoutGroup>
           <div className="s-foot">
             <button type="button" className="s-link" onClick={salir} title="Cerrar sesión">
               <LogOut size={17} aria-hidden />
@@ -180,20 +147,16 @@ export function Shell({ children }: { children: ReactNode }) {
               onClick={() => setColapsado(!colapsado)}
               aria-label={colapsado ? "Expandir menú" : "Contraer menú"}
               title={colapsado ? "Expandir menú" : "Contraer menú"}
-              style={{ display: abierto ? "none" : undefined }}
             >
               {colapsado ? <PanelLeftOpen size={17} aria-hidden /> : <PanelLeftClose size={17} aria-hidden />}
               <span>Contraer</span>
             </button>
           </div>
         </aside>
-        <div className="s-scrim" onClick={() => setAbierto(false)} aria-hidden />
 
         <div className="s-main">
           <header className="s-top">
-            <button type="button" className="s-btn ghost icon s-mobile-only" aria-label="Abrir menú" aria-expanded={abierto} onClick={() => setAbierto(true)}>
-              <Menu size={18} />
-            </button>
+            <span className="s-logo s-mobile-only" aria-hidden />
             <nav className="s-crumbs" aria-label="Ubicación">
               <span className="hide-sm">Staff</span>
               <ChevronRight size={14} aria-hidden className="hide-sm" />
@@ -204,14 +167,31 @@ export function Shell({ children }: { children: ReactNode }) {
               <span>Ir a…</span>
               <kbd>Ctrl K</kbd>
             </button>
+            <button type="button" className="s-btn ghost icon s-mobile-only" aria-label="Cerrar sesión" onClick={salir}>
+              <LogOut size={17} />
+            </button>
           </header>
           <main className="s-scroll" id="contenido">
-            <div className="s-page">{children}</div>
+            <div className="s-page" key={ruta}>
+              {children}
+            </div>
           </main>
         </div>
+
+        <LayoutGroup id="tabs">
+          <nav className="s-tabbar" aria-label="Navegación del panel">
+            {NAV.map((n) => (
+              <Link key={n.href} href={n.href} className="s-tab" aria-current={activo(n) ? "page" : undefined}>
+                {activo(n) && <motion.span layoutId="ind-tab" className="s-ind" transition={{ type: "spring", stiffness: 520, damping: 40 }} />}
+                <n.icono size={20} aria-hidden />
+                <span>{n.texto}</span>
+              </Link>
+            ))}
+          </nav>
+        </LayoutGroup>
       </div>
       <Paleta abierta={paleta} onCerrar={() => setPaleta(false)} ir={ir} salir={salir} />
-    </div>
+    </MotionConfig>
   );
 }
 

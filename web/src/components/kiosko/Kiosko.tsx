@@ -19,7 +19,7 @@ import { crearRastro, PUNTOS_REF, type Rastro } from "./rastro";
 import Rodillo from "./Rodillo";
 import Tarjeta, { type TextoTarjeta } from "./Tarjeta";
 import { k } from "./tiempo";
-import { useRastreoCara, type Objetivo, type Postura } from "./useRastreoCara";
+import { capturarFoto, useRastreoCara, type Objetivo, type Postura } from "./useRastreoCara";
 
 const MOSTRAR_RESULTADO_MS = 4200;
 const ESPERA_MISMO_NIÑO_MS = 6000; // tras un resultado, no vuelve a escanear a quien sigue frente a la cámara
@@ -48,18 +48,18 @@ function mensajeErrorCamara(e: unknown) {
     switch (e.name) {
       case "NotAllowedError":
       case "SecurityError":
-        return "Permite el acceso a la cámara en el navegador y toca la pantalla para reintentar.";
+        return "Permiso de cámara denegado. Actívalo en los ajustes del navegador y toca Reintentar.";
       case "NotFoundError":
       case "DevicesNotFoundError":
         return "No encontramos una cámara disponible en este equipo.";
       case "NotReadableError":
       case "TrackStartError":
-        return "No pudimos abrir la cámara. Cierra otras apps que la estén usando y vuelve a intentar.";
+        return "La cámara está en uso por otra app. Ciérrala y toca Reintentar.";
       default:
-        return "No se pudo iniciar la cámara. Toca la pantalla para reintentar.";
+        return "No se pudo iniciar la cámara. Toca Reintentar.";
     }
   }
-  return e instanceof Error ? e.message : "No se pudo iniciar la cámara. Toca la pantalla para reintentar.";
+  return e instanceof Error ? e.message : "No se pudo iniciar la cámara. Toca Reintentar.";
 }
 
 // Composición del escenario (px del propio escenario). `guia` es el óvalo de reposo de los brackets; `objetivo` es el
@@ -111,6 +111,8 @@ function aResultado(v: Verificacion): { resultado: Resultado; frase: string | nu
       return { resultado: { tono: "aviso", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara" }, frase: "Usa tu cara, no una foto." };
     case "no_reconocido":
       return { resultado: { tono: "aviso", titulo: "No te reconocimos", sub: "Intenta de nuevo o avisa a tu entrenador" }, frase: "No te reconocimos. Intenta de nuevo o avisa a tu entrenador." };
+    case "sin_conexion":
+      return { resultado: { tono: "aviso", titulo: "Sin conexión", sub: "Revisa tu internet e intenta de nuevo" }, frase: null };
     case "sin_jugadores":
       return { resultado: { tono: "error", titulo: "Aún no hay jugadores inscritos", sub: "El staff debe inscribirlos primero" }, frase: null };
     default:
@@ -231,12 +233,23 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     };
   }, []);
 
-  // Cámara: resolución ideal según el dispositivo (sin forzar), y se reabre si el sistema la corta (iOS al ocultar la app).
+  // Reintento manual de cámara/modelo (botón "Reintentar" o toque): con guarda contra dobles toques.
+  const ultimoReintento = useRef(0);
+  const reintentarCamara = useCallback(() => {
+    const t = Date.now();
+    if (t - ultimoReintento.current < 600) return;
+    ultimoReintento.current = t;
+    setErrorCamara(null);
+    setIntento((n) => n + 1);
+  }, []);
+
+  // Cámara: resolución ideal según el dispositivo (sin forzar). Se reabre si el sistema la corta (iOS al ocultar la app),
+  // se reanuda al volver a primer plano y siempre se detienen los tracks al salir.
   useEffect(() => {
     let stream: MediaStream | null = null;
     let cancelado = false;
     (async () => {
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Este navegador no tiene acceso a la cámara.");
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Este navegador no tiene acceso a la cámara (en iPhone usa Safari con HTTPS).");
       const pedir = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
       let s: MediaStream;
       try {
@@ -249,41 +262,47 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
       }
       if (cancelado) return s.getTracks().forEach((t) => t.stop());
       stream = s;
+      s.getVideoTracks().forEach((t) => {
+        // iOS/Android cortan la cámara al ocultar la app o si otra app la toma: se vuelve a abrir.
+        t.addEventListener("ended", () => !cancelado && document.visibilityState === "visible" && setIntento((n) => n + 1));
+      });
       setErrorCamara(null);
-      if (video.current) {
-        video.current.srcObject = s;
-        video.current.play().catch(() => {});
+      const v = video.current;
+      if (v) {
+        v.srcObject = s;
+        v.play().catch(() => {});
       }
-    })().catch((e) => setErrorCamara(mensajeErrorCamara(e)));
+    })().catch((e) => {
+      if (!cancelado) setErrorCamara(mensajeErrorCamara(e));
+    });
     const alVolver = () => {
       if (document.visibilityState !== "visible" || !stream) return;
       if (stream.getVideoTracks().some((t) => t.readyState === "ended")) setIntento((n) => n + 1);
       else video.current?.play().catch(() => {});
     };
+    // Safari puede pausar el <video> (llamada, bloqueo): si está visible, se reanuda.
+    const v0 = video.current;
+    const alPausar = () => document.visibilityState === "visible" && !cancelado && v0?.play().catch(() => {});
+    v0?.addEventListener("pause", alPausar);
     document.addEventListener("visibilitychange", alVolver);
     return () => {
       cancelado = true;
       document.removeEventListener("visibilitychange", alVolver);
+      v0?.removeEventListener("pause", alPausar);
       stream?.getTracks().forEach((t) => t.stop());
+      if (v0) v0.srcObject = null;
     };
   }, [intento]);
 
   useEffect(() => {
     if (!errorCamara) return;
-    let reintentado = false;
-    const reintentar = () => {
-      if (reintentado) return;
-      reintentado = true;
-      setErrorCamara(null);
-      setIntento((n) => n + 1);
-    };
-    window.addEventListener("pointerdown", reintentar, { once: true });
-    window.addEventListener("keydown", reintentar, { once: true });
+    window.addEventListener("pointerdown", reintentarCamara, { once: true });
+    window.addEventListener("keydown", reintentarCamara, { once: true });
     return () => {
-      window.removeEventListener("pointerdown", reintentar);
-      window.removeEventListener("keydown", reintentar);
+      window.removeEventListener("pointerdown", reintentarCamara);
+      window.removeEventListener("keydown", reintentarCamara);
     };
-  }, [errorCamara]);
+  }, [errorCamara, reintentarCamara]);
 
   // La foto capturada es un objectURL: se revoca al reemplazarla y al salir.
   useEffect(() => {
@@ -299,10 +318,17 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
 
   // Contador de llegadas de hoy.
   useEffect(() => {
-    const cargar = () => llegadasDeHoy().then(setHoy);
+    let vivo = true;
+    const cargar = () => {
+      if (document.visibilityState !== "visible") return;
+      llegadasDeHoy().then((n) => vivo && n !== null && setHoy(n));
+    };
     cargar();
     const id = setInterval(cargar, 30_000);
-    return () => clearInterval(id);
+    return () => {
+      vivo = false;
+      clearInterval(id);
+    };
   }, []);
 
   // Verificación: feedback inmediato (fase "enviando" apenas se decide la foto), petición cancelable.
@@ -311,17 +337,23 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   useEffect(
     () => () => {
       pendiente.current?.abort();
+      pendiente.current = null; // evita setState / objectURL tras desmontar
       clearTimeout(subeContador.current);
     },
     [],
   );
   const alCapturando = useCallback(() => setFase("enviando"), []);
   const alFallarCaptura = useCallback(() => setFase("escaneando"), []);
+  const [reintentandoRed, setReintentandoRed] = useState(false);
   const alCapturar = useCallback(async (foto: Blob) => {
     pendiente.current?.abort();
     const ctl = (pendiente.current = new AbortController());
-    const v = await verificar(foto, ctl.signal);
+    setReintentandoRed(false);
+    const v = await verificar(foto, ctl.signal, () => {
+      if (pendiente.current === ctl) setReintentandoRed(true);
+    });
     if (pendiente.current !== ctl) return; // cancelada o reemplazada
+    setReintentandoRed(false);
     const { resultado, frase } = aResultado(v);
     setFotoUrl(URL.createObjectURL(foto));
     // El contador sube cuando la secuencia de éxito avanza: el rodillo se ve, no pasa de golpe.
@@ -347,22 +379,6 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     escenario,
     rastro: enDemo ? undefined : rastro,
   });
-
-  useEffect(() => {
-    if (!errorModeloReal || errorCamara) return;
-    let reintentado = false;
-    const reintentar = () => {
-      if (reintentado) return;
-      reintentado = true;
-      setIntento((n) => n + 1);
-    };
-    window.addEventListener("pointerdown", reintentar, { once: true });
-    window.addEventListener("keydown", reintentar, { once: true });
-    return () => {
-      window.removeEventListener("pointerdown", reintentar);
-      window.removeEventListener("keydown", reintentar);
-    };
-  }, [errorCamara, errorModeloReal]);
 
   // Vista previa (solo desarrollo): fuerza fase/resultado/postura sin cámara.
   const demoResultado = useMemo(() => (demo && DEMO_VERIFICACION[demo] ? aResultado(DEMO_VERIFICACION[demo]).resultado : null), [demo]);
@@ -430,7 +446,35 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     return () => clearTimeout(id);
   }, [esperarSalida, postura]);
 
-  const sinCamara = enDemo ? demo === "camara" : Boolean(errorCamara || errorModelo);
+  const sinCamara = enDemo ? demo === "camara" : Boolean(errorCamara);
+  // El modelo de caras no cargó (red lenta, equipo modesto): se puede seguir con captura manual.
+  const modoManual = !enDemo && Boolean(errorModelo) && !errorCamara;
+
+  // Aviso si el modelo (pesado) tarda en cargar con datos móviles lentos.
+  const [cargaLenta, setCargaLenta] = useState(false);
+  const esperandoModelo = !listo && !errorCamara && !modoManual;
+  useEffect(() => {
+    if (!esperandoModelo) return;
+    const id = setTimeout(() => setCargaLenta(true), 8000);
+    return () => {
+      clearTimeout(id);
+      setCargaLenta(false);
+    };
+  }, [esperandoModelo, intento]);
+
+  const tomarManual = useCallback(async () => {
+    const v = video.current;
+    if (!v || !v.videoWidth) return;
+    setFase("enviando");
+    let foto: Blob | null = null;
+    try {
+      foto = await capturarFoto(v);
+    } catch {
+      foto = null;
+    }
+    if (foto) alCapturar(foto);
+    else setFase("escaneando");
+  }, [alCapturar]);
   const resultadoVisible = fase === "resultado" && Boolean(resultado);
   const tono = resultado?.tono;
   const exito = resultadoVisible && tono === "exito";
@@ -441,8 +485,8 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   // Texto de arriba (guía) y tarjeta de abajo (resultado).
   const cartaTexto: TextoTarjeta | null = sinCamara
     ? {
-        titulo: errorCamara || demo === "camara" ? "Cámara no disponible" : "Reconocimiento no disponible",
-        sub: errorCamara ?? errorModelo ?? "Permite el acceso a la cámara en el navegador y toca la pantalla para reintentar.",
+        titulo: "Cámara no disponible",
+        sub: errorCamara ?? "Permite el acceso a la cámara en el navegador y toca Reintentar.",
       }
     : resultadoVisible
       ? resultado
@@ -451,8 +495,10 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   if (sinCamara || (resultadoVisible && tono === "error")) arriba = { titulo: "Hay un problema", sub: "Avisa al staff" };
   else if (resultadoVisible && tono === "aviso") arriba = { titulo: "Intenta de nuevo", sub: "Mira de frente, con buena luz" };
   else if (exito) arriba = sobrio ? { titulo: "Ya estabas registrado", sub: "Tu llegada de hoy ya estaba lista" } : { titulo: "¡Llegada registrada!", sub: "Bienvenido a FA CUP" };
+  else if (reintentandoRed && fase === "enviando") arriba = { titulo: "Sin conexión, reintentando…", sub: "No te muevas" };
   else if (fase === "enviando") arriba = { titulo: "Casi listo", sub: "Un momento" };
-  else if (!listo) arriba = { titulo: "Preparando la cámara", sub: "Un momento" };
+  else if (modoManual) arriba = { titulo: "Toma tu foto", sub: "Pon tu cara en el marco y toca el botón" };
+  else if (!listo) arriba = { titulo: "Preparando la cámara", sub: cargaLenta ? "Conexión lenta, cargando…" : "Un momento" };
   else if (esperarSalida && postura !== "sin-cara") arriba = { titulo: "Listo", sub: "Puede pasar el siguiente" };
   else arriba = GUIA[postura];
 
@@ -624,6 +670,22 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {(sinCamara && !enDemo) && (
+              <button type="button" className="reco-salir !min-h-[52px] !px-7 !bg-white/20" onClick={(e) => { e.stopPropagation(); reintentarCamara(); }}>
+                Reintentar
+              </button>
+            )}
+            {modoManual && !resultadoVisible && (
+              <div className="flex items-center gap-2">
+                <button type="button" className="reco-salir !min-h-[52px] !px-7 !bg-white/25" disabled={fase !== "escaneando"} onClick={(e) => { e.stopPropagation(); void tomarManual(); }}>
+                  Tomar foto
+                </button>
+                <button type="button" className="reco-salir" onClick={(e) => { e.stopPropagation(); reintentarCamara(); }}>
+                  Reintentar
+                </button>
+              </div>
+            )}
 
             {/* Barra de vidrio: llegadas de hoy y Salir */}
             <motion.div

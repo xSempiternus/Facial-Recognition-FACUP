@@ -17,7 +17,8 @@ export type Objetivo = { cx: number; cy: number; r: number }; // círculo centra
 const MANTENER_MS = 900; // tiempo quieto en el círculo para sacar la foto
 const PERDER_MS = 350; // si se mueve, el anillo se vacía en este tiempo
 const LADO_MAX_FOTO = 720; // la foto que sube al servidor: lado largo máximo (px)
-const CALIDAD_JPEG = 0.85;
+const CALIDAD_JPEG = 0.8; // ~50-90 KB a 720 px: suficiente para reconocer y liviano en datos móviles
+const TIEMPO_MODELO_MS = 60_000; // si el modelo no carga (red lenta), el kiosko pasa a captura manual
 // Intervalo mínimo entre análisis (ms). Con alguien frente a la cámara se analiza más seguido; sin nadie, la mitad.
 const INTERVALO_MS: Record<Calidad, number> = { alto: 33, medio: 50, bajo: 80 };
 
@@ -75,6 +76,11 @@ export function useRastreoCara({
   // Carga del modelo (wasm y modelo servidos desde /public: funciona sin internet).
   useEffect(() => {
     let cancelado = false;
+    let expiro = false;
+    const reloj = setTimeout(() => {
+      expiro = true;
+      if (!cancelado) setError("El reconocimiento automático tardó demasiado en cargar.");
+    }, TIEMPO_MODELO_MS);
     (async () => {
       try {
         // Carga perezosa: la librería (y su wasm) no pesan en el primer pintado del kiosko.
@@ -97,15 +103,18 @@ export function useRastreoCara({
           }
         }
         if (!fl) throw ultimoError ?? new Error("No se pudo cargar el modelo de reconocimiento facial.");
-        if (cancelado) return fl.close();
+        clearTimeout(reloj);
+        if (cancelado || expiro) return fl.close();
         detector.current = fl;
         setListo(true);
       } catch (e) {
-        if (!cancelado) setError(e instanceof Error ? e.message : "No se pudo cargar el detector de caras. Toca la pantalla para reintentar.");
+        clearTimeout(reloj);
+        if (!cancelado && !expiro) setError(e instanceof Error ? e.message : "No se pudo cargar el detector de caras. Toca la pantalla para reintentar.");
       }
     })();
     return () => {
       cancelado = true;
+      clearTimeout(reloj);
       detector.current?.close();
       detector.current = null;
     };
@@ -248,7 +257,7 @@ export function useRastreoCara({
         void (async () => {
           let foto: Blob | null = null;
           try {
-            foto = await capturar(v);
+            foto = await capturarFoto(v);
           } catch {
             foto = null; // toBlob/drawImage pueden lanzar: se trata como captura fallida
           } finally {
@@ -277,7 +286,7 @@ export function useRastreoCara({
 let lienzo: HTMLCanvasElement | null = null;
 
 /** Cuadro actual de la cámara como JPEG ≤720 px de lado largo, sin espejo (como lo vería cualquier otra cámara). */
-function capturar(v: HTMLVideoElement): Promise<Blob | null> {
+export function capturarFoto(v: HTMLVideoElement): Promise<Blob | null> {
   const k = Math.min(1, LADO_MAX_FOTO / Math.max(v.videoWidth, v.videoHeight));
   const c = (lienzo ??= document.createElement("canvas"));
   c.width = Math.round(v.videoWidth * k);

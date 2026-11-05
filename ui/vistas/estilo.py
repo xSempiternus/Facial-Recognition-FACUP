@@ -24,7 +24,7 @@ with st.container(border=True):
 with st.container(border=True):
     st.markdown("#### :material/format_color_fill: Colores")
     colores = [
-        ("Morado FA CUP", core.MORADO, "Marca: logo, títulos, cabecera y fondo del kiosko (facupchile.cl)."),
+        ("Verde FA CUP", "#008D36", "Marca: logo, títulos, cabecera y fondo del kiosko (facupchile.cl)."),
         ("Morado acción", core.MORADO_2, "Botón principal. Texto blanco con contraste AAA."),
         ("Dorado", core.DORADO, "Acento: brillo del escaneo, celebración y foco de teclado. Texto oscuro encima."),
         ("Lavanda", core.LAVANDA, "Secundario: textos de apoyo y viñetas."),

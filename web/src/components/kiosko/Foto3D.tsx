@@ -57,6 +57,9 @@ type Props = {
   className?: string;
 };
 
+// Respaldo si la foto no carga: degradado verde oscuro de la marca en vez de fondo en blanco.
+const FONDO_RESPALDO = { background: "linear-gradient(180deg, #031412, #07281f)" } as const;
+
 export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, resolucion = 1, className }: Props) {
   const contenedor = useRef<HTMLDivElement>(null);
   const [sinWebGL, setSinWebGL] = useState(false);
@@ -199,8 +202,10 @@ export default function Foto3D({ src, profundidad, seguimiento, fuerza = 0.045, 
   }, [src, profundidad, fuerza, estatico]);
 
   if (sinWebGL || estatico) {
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt="" decoding="async" className={`h-full w-full object-cover ${className ?? ""}`} />;
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={src} alt="" decoding="async" className={`h-full w-full object-cover ${className ?? ""}`} style={FONDO_RESPALDO} />
+    );
   }
-  return <div ref={contenedor} className={`h-full w-full ${className ?? ""}`} />;
+  return <div ref={contenedor} className={`h-full w-full ${className ?? ""}`} style={FONDO_RESPALDO} />;
 }

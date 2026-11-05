@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
-import { preload } from "react-dom";
 import "./globals.css";
 
 // Geist (OFL, ver src/fonts/Geist-LICENSE.txt): sans neutra y precisa. Local: el kiosko funciona sin internet.
@@ -21,14 +20,9 @@ export const viewport: Viewport = {
   viewportFit: "cover", // pantalla completa bajo el notch; el contenido respeta env(safe-area-inset-*)
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
-  // Precarga del modelo facial y su wasm: se descargan mientras carga la interfaz, no después.
-  preload("/models/face_landmarker.task", { as: "fetch", crossOrigin: "anonymous" });
-  preload("/mediapipe/vision_wasm_internal.wasm", { as: "fetch", crossOrigin: "anonymous" });
   return (
     <html lang="es" className={`${geist.variable} h-full`}>
       <body className="h-full">{children}</body>

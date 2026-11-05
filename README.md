@@ -1,7 +1,6 @@
 # Asistencia con Reconocimiento Facial — Liga de Fútbol Infantil (MVP)
 
-MVP local: FastAPI + DeepFace + SQLite. Kiosko de llegada en Next.js (`web/`); panel del staff en Streamlit
-(se migra a `web/` por etapas).
+MVP local: FastAPI + DeepFace + SQLite. Kiosko de llegada en Next.js (`web/`); panel del staff en `/staff` (el panel Streamlit de `ui/` queda como opcional).
 
 ## Estructura
 
@@ -13,12 +12,13 @@ api/main.py              API FastAPI
 web/                     Kiosko de llegada: Next.js + Motion + MediaPipe (ver web/README.md)
 ui/app.py                Panel del staff en Streamlit (navegación)
 ui/core.py               cliente de la API, estilos y componentes compartidos
-ui/vistas/               páginas: kiosko, acceso, inscribir, jugadores, asistencia, evaluacion
+ui/vistas/               páginas del panel Streamlit: acceso, inscribir, jugadores, asistencia, reportes, evaluacion, ajustes
 scripts/evaluar_modelos.py  benchmark de modelos/detectores con fotos propias
 eval/fotos/              fotos de prueba (una carpeta por persona)
 eval/resultados/         resultados de la evaluación
 .streamlit/config.toml   tema visual
-iniciar.bat              lanza API + panel del staff + kiosko en Windows (doble clic)
+iniciar.bat              lanza API + app web (kiosko y /staff) en Windows (doble clic)
+iniciar-demo.bat         demo desde el celular: API + app web + túnel público de Cloudflare
 ```
 
 ## Instalación
@@ -41,7 +41,7 @@ descarga también el modelo de MediaPipe) y luego funciona sin conexión.
 
 ## Ejecución
 
-Doble clic en `iniciar.bat` (abre tres ventanas), o en terminales separadas (con el venv activado, desde la raíz):
+Doble clic en `iniciar.bat` (abre dos ventanas: API y app web, y Edge en http://localhost:3000), o en terminales separadas (con el venv activado, desde la raíz):
 
 ```bash
 set PYTHONUTF8=1
@@ -51,13 +51,19 @@ cd web && npm install && npm run build && npm start
 ```
 
 **Seguridad:** el staff entra con el PIN (`POST /auth/login`) y recibe un token firmado con vencimiento; todos los endpoints salvo `/health`, `/verify` y `/kiosko/resumen` lo exigen. Tras 5 PIN incorrectos seguidos se bloquea el acceso 5 minutos.  
-**PIN del staff:** copia `config.local.example.bat` como `config.local.bat` y cambia `STAFF_PIN`.
-`iniciar.bat` lo carga solo y el archivo no se sube a git.
+**PIN del staff:** copia `config.local.example.bat` como `config.local.bat` y define `STAFF_PIN` (recomendado: mínimo 8 caracteres).
+`iniciar.bat` e `iniciar-demo.bat` lo cargan solos y el archivo no se sube a git.
+
+**Demo desde el celular:** doble clic en `iniciar-demo.bat`. Levanta la API, la app web compilada (`0.0.0.0:3000`) y un túnel
+`cloudflared` (necesita `cloudflared` en el PATH); espera a que el túnel esté listo, imprime la URL `https://*.trycloudflare.com`
+y la copia al portapapeles. Define `TRUST_PROXY=1` solo. Si el 3000 o el 8000 ya están ocupados, avisa y no duplica nada.
+El script evita la suspensión del PC mientras corre (sin cambiar la configuración de energía); Enter en su ventana apaga todo.
+La URL cambia en cada ejecución.
 
 - **App web:** http://localhost:3000 (pantalla completa con F11). Abre en un **menú** con dos accesos:
   *Registrar asistencia* (`/asistencia`, el kiosko de llegada) y *Soy admin* (`/staff`, panel del staff con PIN).
   Salir de `/asistencia` pide el PIN del staff. `/asistencia` también abre directo para una tablet dedicada.
-- **Panel del staff:** http://localhost:8501
+- **Panel Streamlit (opcional, ya no lo lanza `iniciar.bat`):** `streamlit run ui/app.py` en http://localhost:8501
 - API (documentación interactiva): http://127.0.0.1:8000/docs
 
 ## Uso
@@ -69,9 +75,8 @@ su nombre. Ya registrado: lo mismo en verde oscuro. Error: tarjeta amarilla (vue
 (llama al staff). Saluda en voz alta con la voz del navegador (`?voz=0` la apaga; `?prueba=1` deja el
 resultado en pantalla hasta tocarla). Para una voz latinoamericana, instálala en Windows:
 Configuración → Hora e idioma → Voz → Agregar voces → Español (México). Detalles en `web/README.md`.
-La página «Llegada» de Streamlit sigue disponible mientras se completa la migración.
 
-**🔐 Staff** (http://localhost:8501; PIN en `config.local.bat`, por defecto `1234`):
+**🔐 Staff** (http://localhost:3000/staff; PIN en `config.local.bat`, por defecto `1234`):
 - **📝 Inscribir** — 3 pasos: datos → 3 fotos guiadas (frente, izquierda, derecha) → listo. Comprueba que
   las 3 fotos sean de la misma persona y avisa si el niño parece ya inscrito.
 - **👥 Jugadores** — búsqueda, filtro por categoría, cantidad de fotos, marcar asistencia a mano,
@@ -142,7 +147,8 @@ valores por defecto < variables de entorno < `data/config.json`.
 | `FACE_MODEL`      | `Facenet512`            | Modelo DeepFace                                    |
 | `FACE_DETECTOR`   | `opencv`                | Detector de caras                                  |
 | `API_URL`         | `http://127.0.0.1:8000` | URL de la API usada por Streamlit                  |
-| `STAFF_PIN`       | `1234`                  | PIN del panel del staff                            |
+| `STAFF_PIN`       | `1234`                  | PIN del panel del staff (definirlo en `config.local.bat`, mín. 8 caracteres) |
+| `TRUST_PROXY`     | `0`                     | `1` si la API va detrás de un proxy/túnel (usa la IP real del cliente); lo activa `iniciar-demo.bat` |
 | `AUTH_SECRET`     | aleatoria por arranque  | Clave que firma las sesiones del staff             |
 | `AUTH_TTL_HORAS`  | `12`                    | Duración de la sesión del staff                    |
 | `CORS_ORIGINS`    | `http://localhost:3000` | Orígenes web permitidos (separados por coma)       |

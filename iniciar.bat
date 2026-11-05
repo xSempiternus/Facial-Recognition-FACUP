@@ -1,8 +1,7 @@
 @echo off
-REM Inicia la API, el panel del staff y el kiosko de llegada, y abre el kiosko a pantalla completa.
-REM   Kiosko de llegada (Next.js)   http://localhost:3000   <- la pantalla de los ninos (se abre sola)
-REM   Panel del staff (Streamlit)   http://localhost:8501
-REM   API (FastAPI + DeepFace)      http://127.0.0.1:8000
+REM Inicia la API y la app web, y abre la app en Edge a pantalla completa.
+REM   App web (Next.js)         http://localhost:3000   <- menu: /asistencia (kiosko de llegada) y /staff (panel del staff con PIN)
+REM   API (FastAPI + DeepFace)  http://127.0.0.1:8000
 cd /d "%~dp0"
 REM DeepFace imprime emojis en sus logs; sin UTF-8 Python falla en consolas cp1252.
 set PYTHONUTF8=1
@@ -15,16 +14,15 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 start "API - Reconocimiento facial" cmd /k ".venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000"
-start "Staff - Asistencia" cmd /k ".venv\Scripts\python.exe -m streamlit run ui/app.py --server.headless true"
 
-REM Kiosko web: instala dependencias la primera vez y compila (asi siempre corre la version al dia).
+REM App web: instala dependencias la primera vez y compila (asi siempre corre la version al dia).
 where npm >nul 2>nul
 if errorlevel 1 (
-    echo No se encontro Node.js: el kiosko no se inicio. Instala Node.js LTS desde nodejs.org.
+    echo No se encontro Node.js: la app web no se inicio. Instala Node.js LTS desde nodejs.org.
     pause
     exit /b 0
 )
-start "Kiosko - FA CUP" cmd /k "cd /d web && (if not exist node_modules call npm install) && call npm run build && call npm start -- -p 3000"
+start "Web - FA CUP" cmd /k "cd /d web && (if not exist node_modules call npm install) && call npm run build && call npm start -- -p 3000"
 
-REM Cuando el kiosko responda, se abre en Edge como app a pantalla completa (F11 para salir).
+REM Cuando la app web responda, se abre en Edge (menu en la raiz) a pantalla completa (F11 para salir).
 start "" /min powershell -NoProfile -WindowStyle Hidden -Command "for($i=0;$i -lt 300;$i++){try{if((Invoke-WebRequest -UseBasicParsing http://localhost:3000 -TimeoutSec 3).StatusCode -eq 200){break}}catch{};Start-Sleep -Seconds 2}; try{Start-Process msedge -ArgumentList '--app=http://localhost:3000','--start-fullscreen' -ErrorAction Stop}catch{Start-Process 'http://localhost:3000'}"

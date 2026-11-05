@@ -31,13 +31,6 @@ export default function Menu() {
   const router = useRouter();
   const [fase, setFase] = useState<Fase>("menu");
 
-  // Estilo de botones (a: Apple, b: editorial, c: verde). Solo para comparar alternativas con ?btn=a|b|c.
-  const [variante, setVariante] = useState("a");
-  useEffect(() => {
-    const v = new URLSearchParams(window.location.search).get("btn");
-    if (v === "a" || v === "b" || v === "c") setVariante(v);
-  }, []);
-
   // Seguimiento del puntero (solo ratón): la foto se comporta como una ventana. En táctil se queda su órbita propia.
   const x = useMotionValue(0);
   const y = useMotionValue(0);
@@ -104,7 +97,6 @@ export default function Menu() {
     <MotionConfig reducedMotion="user">
       <motion.main
         className="menu-raiz"
-        data-btn={variante}
         onPointerMove={alMover}
         onPointerLeave={() => presente.set(0)}
         animate={{ opacity: fase === "saliendo" ? 0 : 1 }}

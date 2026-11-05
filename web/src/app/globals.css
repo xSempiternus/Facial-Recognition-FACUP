@@ -584,15 +584,15 @@ body {
   justify-content: center;
   gap: 12px;
   width: 100%;
-  min-height: 60px;
+  min-height: 56px;
   padding: 0 20px;
-  border-radius: 8px;
+  border-radius: 14px;
   border: 0;
   font-family: inherit;
-  font-size: 0.9375rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: none;
   white-space: nowrap;
   color: #fff;
   cursor: pointer;
@@ -612,9 +612,7 @@ body {
   cursor: default;
 }
 .menu-boton-compacto {
-  min-height: 52px;
   padding: 0 12px;
-  font-size: 0.8125rem;
   gap: 8px;
 }
 .menu-icono {
@@ -882,48 +880,3 @@ body {
   }
 }
 
-/* ───────── Alternativas de botones del menú (?btn=a|b|c) ───────── */
-/* A · Apple: sin mayúsculas ni tracking, esquina continua de 14px, peso 600. */
-.menu-raiz[data-btn="a"] .menu-boton {
-  border-radius: 14px;
-  min-height: 56px;
-  font-size: 1.0625rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  text-transform: none;
-}
-/* B · Editorial: casi recto, mayúsculas finas; el secundario es solo línea. */
-.menu-raiz[data-btn="b"] .menu-boton {
-  border-radius: 2px;
-  min-height: 56px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  letter-spacing: 0.18em;
-}
-.menu-raiz[data-btn="b"] .menu-boton-vidrio {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.55);
-}
-.menu-raiz[data-btn="b"] .menu-icono {
-  display: none;
-}
-/* C · Verde de marca sólido; el secundario es un enlace de texto, sin caja. */
-.menu-raiz[data-btn="c"] .menu-boton {
-  border-radius: 12px;
-  min-height: 56px;
-  font-size: 1.0625rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  text-transform: none;
-}
-.menu-raiz[data-btn="c"] .menu-boton-primario {
-  background: linear-gradient(180deg, #0aa043 0%, #008d36 100%);
-  color: #fff;
-  box-shadow: 0 12px 28px -10px rgb(0 141 54 / 0.7);
-}
-.menu-raiz[data-btn="c"] .menu-boton-vidrio {
-  min-height: 44px;
-  background: transparent;
-  box-shadow: none;
-  color: rgb(246 250 248 / 0.85);
-}

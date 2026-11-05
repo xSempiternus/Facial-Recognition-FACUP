@@ -19,7 +19,10 @@ _SECRET = os.getenv("AUTH_SECRET", "").encode() or secrets.token_bytes(32)
 
 VENTANA_S = 300
 MAX_FALLOS_POR_CLIENTE = 5
-MAX_FALLOS_GLOBAL = 30
+# Límite global alto a propósito: el límite real es por cliente. Uno bajo dejaría que un atacante
+# (con IPs distintas) bloquee al staff legítimo; este solo frena ataques distribuidos masivos.
+MAX_FALLOS_GLOBAL = 300
+TRUST_PROXY = os.getenv("TRUST_PROXY") == "1"
 _fallos: dict[str, deque] = defaultdict(deque)
 _fallos_global: deque = deque()
 
@@ -61,8 +64,13 @@ def requerir_staff(authorization: str | None = Header(None)) -> None:
 
 
 def _cliente(request: Request) -> str:
-    reenviado = request.headers.get("x-forwarded-for", "")
-    return reenviado.split(",")[0].strip() or (request.client.host if request.client else "?")
+    # Detrás de Next.js + cloudflared el socket siempre es 127.0.0.1: con TRUST_PROXY=1 se usa el
+    # primer valor de X-Forwarded-For (el cliente original). Sin TRUST_PROXY se ignora (es falsificable).
+    if TRUST_PROXY:
+        reenviado = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if reenviado:
+            return reenviado
+    return request.client.host if request.client else "?"
 
 
 def _podar(cola: deque, ahora: float) -> None:

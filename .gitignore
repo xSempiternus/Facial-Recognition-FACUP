@@ -11,3 +11,4 @@ eval/resultados/
 !.claude/skills/
 config.local.bat
 eval/midas_small.onnx
+Claude outputs/

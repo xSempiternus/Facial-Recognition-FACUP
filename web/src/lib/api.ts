@@ -1,7 +1,7 @@
 // Cliente de la API de reconocimiento (FastAPI). Next la expone en /api/* (ver next.config.ts).
 
 export type Verificacion =
-  | { ok: true; nombre: string; categoria: string | null; yaRegistrado: boolean; registradoALas: string | null; similitud: number }
+  | { ok: true; nombre: string; categoria: string | null; yaRegistrado: boolean; registradoALas: string | null; similitud?: number }
   | { ok: false; codigo: string; mensaje: string; similitud?: number };
 
 const TIEMPO_MAX_MS = 15_000;

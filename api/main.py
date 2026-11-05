@@ -2,7 +2,9 @@
 
 import asyncio
 import base64
+import io
 import itertools
+import logging
 import os
 import re
 import time
@@ -13,10 +15,20 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from PIL import Image
 from pydantic import BaseModel
 
 from api import auth
 from src import cv_engine, db_manager, reportes
+
+log = logging.getLogger("uvicorn.error")
+
+# Límites de subida (se rechazan antes de la inferencia pesada). /verify es público y el kiosko solo manda
+# fotos de ~720 px, así que ahí el tope es estricto; el staff (con sesión) sube fotos de galería o de cámaras HD.
+MAX_BYTES_IMAGEN = 2 * 1024 * 1024
+MAX_LADO_IMAGEN = 2000
+MAX_BYTES_IMAGEN_STAFF = 15 * 1024 * 1024
+MAX_LADO_IMAGEN_STAFF = 8000
 
 # Por debajo de esta fracción del ancho de la imagen, la cara se considera muy lejana.
 MIN_FACE_SIZE = 0.15
@@ -130,13 +142,26 @@ app.add_middleware(
 
 
 async def _analyze(file: UploadFile, miniatura: bool = False, n_foto: int | None = None,
-                   antispoofing: bool = False, rapido: bool = False) -> dict:
+                   antispoofing: bool = False, rapido: bool = False, publico: bool = False) -> dict:
     await file.seek(0)
-    image_bytes = await file.read()
     cual = f" en la foto {n_foto}" if n_foto else ""
     extra = {"foto": n_foto} if n_foto else {}
+    max_bytes = MAX_BYTES_IMAGEN if publico else MAX_BYTES_IMAGEN_STAFF
+    max_lado = MAX_LADO_IMAGEN if publico else MAX_LADO_IMAGEN_STAFF
+    # Lectura con tope (un byte de más basta para detectar el exceso sin cargar el archivo entero).
+    image_bytes = await file.read(max_bytes + 1)
     if not image_bytes:
         _error(400, "imagen_vacia", f"La imagen está vacía{cual}.", **extra)
+    if len(image_bytes) > max_bytes:
+        _error(413, "imagen_pesada", f"La imagen{cual} pesa más de {max_bytes // (1024 * 1024)} MB. Usa una foto más liviana.", **extra)
+    try:
+        # Solo se lee la cabecera: rechazar una imagen enorme no cuesta decodificarla.
+        with Image.open(io.BytesIO(image_bytes)) as im:
+            ancho, alto = im.size
+    except Exception:
+        _error(400, "imagen_invalida", f"No se pudo leer la imagen{cual}.", **extra)
+    if max(ancho, alto) > max_lado:
+        _error(422, "imagen_grande", f"La imagen{cual} supera {max_lado} px de lado. Usa una foto más pequeña.", **extra)
     try:
         # DeepFace es bloqueante (CPU); se ejecuta fuera del event loop.
         return await run_in_threadpool(cv_engine.analyze_face, image_bytes, miniatura, antispoofing, rapido)
@@ -146,8 +171,10 @@ async def _analyze(file: UploadFile, miniatura: bool = False, n_foto: int | None
         _error(422, "sin_rostro", f"No se detectó ningún rostro{cual}.", **extra)
     except ValueError as exc:
         _error(400, "imagen_invalida", f"{str(exc).rstrip('.')}{cual}.", **extra)
-    except RuntimeError as exc:
-        _error(500, "error_motor", str(exc))
+    except RuntimeError:
+        # El detalle va al log; al cliente solo un mensaje genérico.
+        log.exception("Error del motor de reconocimiento")
+        _error(500, "error_motor", "Error interno del reconocimiento facial. Inténtalo de nuevo.")
 
 
 @app.get("/health")
@@ -290,11 +317,11 @@ async def verify(file: UploadFile = File(...)):
 
     antispoofing = cv_engine.config.get("antispoofing", False)
     # Camino rápido: solo se acepta si el parecido es claramente alto; si no, se confirma con el de referencia.
-    face = await _analyze(file, miniatura=True, antispoofing=antispoofing, rapido=True)
+    face = await _analyze(file, miniatura=True, antispoofing=antispoofing, rapido=True, publico=True)
     jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=_threshold())
     if cv_engine.config["detector"] == "retinaface" and not antispoofing and (
             jugador_id is None or score < _threshold() + MARGEN_VERIFICACION_RAPIDA):
-        face = await _analyze(file, miniatura=True, antispoofing=antispoofing)
+        face = await _analyze(file, miniatura=True, antispoofing=antispoofing, publico=True)
         jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=_threshold())
 
     if jugador_id is None:
@@ -309,19 +336,18 @@ async def verify(file: UploadFile = File(...)):
             "embedding": face["embedding"], "modelo": cv_engine.config["modelo"],
             "miniatura": face["miniatura"], "sugerido_id": sugerido, "similitud": sim,
         }
-        _error(404, "no_reconocido", "Jugador no reconocido.", similitud=round(score, 4), pendiente_id=pid)
+        _error(404, "no_reconocido", "Jugador no reconocido.")
 
     jugador = _jugadores_cache[jugador_id]
     registrado_a_las = db_manager.asistio_hoy(jugador_id)
     if registrado_a_las is None:
         db_manager.registrar_asistencia(jugador_id)
 
+    # Endpoint público (sin auth): solo lo que muestra el kiosko. Nombre de pila, sin id ni similitud.
     return {
         "status": "success",
-        "nombre": jugador["nombre"],
+        "nombre": (jugador["nombre"].split() or [""])[0],
         "categoria": jugador["categoria"],
-        "jugador_id": jugador_id,
-        "similitud": round(score, 4),
         "ya_registrado": registrado_a_las is not None,
         "registrado_a_las": registrado_a_las,
     }

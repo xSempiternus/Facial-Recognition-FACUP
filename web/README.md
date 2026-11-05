@@ -1,7 +1,7 @@
 # Kiosko web FA CUP Chile
 
 Frontend del kiosko de llegada: Next.js + React + TypeScript + Tailwind v4 + Motion + MediaPipe.
-Reemplaza al kiosko de Streamlit; el panel del staff sigue en Streamlit por ahora.
+Reemplaza al kiosko de Streamlit; el panel del staff también vive aquí (`/staff`).
 
 ## Flujo de pantallas
 

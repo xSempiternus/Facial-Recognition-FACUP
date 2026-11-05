@@ -37,6 +37,7 @@ export function Camara({
     if (demo) return;
     let flujo: MediaStream | null = null;
     let vivo = true;
+    const el = video.current;
     (async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) throw new Error("sin_api");
@@ -60,6 +61,7 @@ export function Camara({
     return () => {
       vivo = false;
       flujo?.getTracks().forEach((t) => t.stop());
+      if (el) el.srcObject = null;
     };
   }, [demo]);
 

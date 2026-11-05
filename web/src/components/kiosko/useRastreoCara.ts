@@ -245,14 +245,21 @@ export function useRastreoCara({
         capturando = true;
         activoRef.current = false;
         capturaRef.current.onCapturando?.(); // feedback inmediato: "Verificando…" antes de procesar la foto
-        capturar(v).then((foto) => {
-          capturando = false;
+        void (async () => {
+          let foto: Blob | null = null;
+          try {
+            foto = await capturar(v);
+          } catch {
+            foto = null; // toBlob/drawImage pueden lanzar: se trata como captura fallida
+          } finally {
+            capturando = false;
+          }
           if (foto) capturaRef.current.onCaptura(foto);
           else {
             activoRef.current = true; // no se pudo leer la cámara: seguir intentando
             capturaRef.current.onCapturaFallida?.();
           }
-        });
+        })();
       }
     }
     programar();

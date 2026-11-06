@@ -116,8 +116,9 @@ export function Shell({ children }: { children: ReactNode }) {
       <div className={clsx("s-shell", colapsado && "s-collapsed")}>
         <aside className="s-sidebar" aria-label="Navegación del panel">
           <div className="s-brand">
-            <span className="s-logo" aria-hidden />
-            <span className="s-brand-t">FA CUP · Staff</span>
+            <span className="s-logo s-logo-chico" aria-hidden />
+            <span className="s-logo-full" role="img" aria-label="FA CUP Chile" />
+            <span className="s-brand-t">Staff</span>
           </div>
           <LayoutGroup id="side">
             <nav className="s-nav">
@@ -156,7 +157,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
         <div className="s-main">
           <header className="s-top">
-            <span className="s-logo s-mobile-only" aria-hidden />
+            <span className="s-logo-full s-mobile-only" role="img" aria-label="FA CUP Chile" />
             <nav className="s-crumbs" aria-label="Ubicación">
               <span className="hide-sm">Staff</span>
               <ChevronRight size={14} aria-hidden className="hide-sm" />

@@ -50,7 +50,7 @@ streamlit run ui/app.py
 cd web && npm install && npm run build && npm start
 ```
 
-**Seguridad:** el staff entra con el PIN (`POST /auth/login`) y recibe un token firmado con vencimiento; todos los endpoints salvo `/health`, `/verify` y `/kiosko/resumen` lo exigen. Tras 5 PIN incorrectos seguidos se bloquea el acceso 5 minutos.  
+**Seguridad:** el staff entra con el PIN (`POST /auth/login`) y recibe un token firmado con vencimiento; todos los endpoints salvo `/health`, `/verify`, `/kiosko/resumen` y `/voz` lo exigen; la documentación `/docs` está apagada (`ENABLE_DOCS=1` para desarrollo). Tras 5 PIN incorrectos seguidos se bloquea el acceso 5 minutos.  
 **PIN del staff:** copia `config.local.example.bat` como `config.local.bat` y define `STAFF_PIN` (recomendado: mínimo 8 caracteres).
 `iniciar.bat` e `iniciar-demo.bat` lo cargan solos y el archivo no se sube a git.
 
@@ -168,7 +168,7 @@ valores por defecto < variables de entorno < `data/config.json`.
 - `GET /jornadas?desde&hasta`, `PUT /jornadas/{fecha}` (form-data `tipo`: entrenamiento | partido)
 - `GET /reportes?desde&hasta&tipo` (por defecto, últimos 30 días)
 - `GET /config`, `PUT /config` — `{"modelo", "detector", "umbral", "antispoofing"?}`
-- `GET /health`
+- `GET /health` (público, solo `{"status":"ok"}`) y `GET /health/detalle` (staff)
 
 ## Privacidad
 

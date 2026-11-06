@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { precalentar } from "@/lib/api";
 import { ApiError, iniciarSesion, leerToken } from "@/lib/staff-api";
 import { useAreaVisible } from "@/lib/teclado";
+import { iniciarSonidos, sonar } from "@/lib/sonidos";
 import { desbloquearVoz } from "@/lib/voz";
 import { iniciarCalidad } from "@/components/kiosko/calidad";
 import FondoVivo from "@/components/kiosko/FondoVivo";
@@ -62,18 +63,23 @@ export default function Menu() {
   function registrar() {
     // Gesto del usuario: único momento en que iOS/Safari dejan desbloquear la voz.
     desbloquearVoz();
+    iniciarSonidos();
+    sonar("tap");
     precalentar();
     // Se conservan ?voz, ?prueba, ?demo, ?calidad al entrar al reconocimiento.
     router.push(`/asistencia${window.location.search}`);
   }
 
   function admin() {
+    iniciarSonidos();
+    sonar("abrir");
     if (leerToken()) entrarAlPanel();
     else setFase("clave");
   }
 
   // Salida suave: la pantalla se funde a negro antes de cambiar de ruta.
   function entrarAlPanel() {
+    sonar("exito");
     setFase("saliendo");
     window.setTimeout(() => router.push("/staff"), 380);
   }
@@ -161,9 +167,9 @@ export default function Menu() {
                     <ScanFace className="menu-icono" strokeWidth={1.75} aria-hidden />
                     Registrar asistencia
                   </button>
-                  <button type="button" className="menu-boton menu-boton-vidrio" onClick={admin}>
-                    <ShieldCheck className="menu-icono" strokeWidth={1.75} aria-hidden />
-                    Soy admin
+                  <button type="button" className="menu-enlace" onClick={admin}>
+                    <ShieldCheck size={16} strokeWidth={2} aria-hidden />
+                    Acceso admin
                   </button>
                 </motion.div>
               </motion.section>
@@ -173,7 +179,10 @@ export default function Menu() {
               <HojaClave
                 key="clave"
                 visible={fase === "clave"}
-                onVolver={() => setFase("menu")}
+                onVolver={() => {
+                  sonar("volver");
+                  setFase("menu");
+                }}
                 onCorrecto={entrarAlPanel}
               />
             )}
@@ -217,6 +226,7 @@ function HojaClave({
       await iniciarSesion(pin);
       onCorrecto();
     } catch (err) {
+      sonar("error");
       setError(err instanceof ApiError ? err.message : "No se pudo iniciar sesión.");
       setPin("");
       setCargando(false);

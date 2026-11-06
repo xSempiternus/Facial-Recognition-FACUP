@@ -7,7 +7,7 @@ REM DeepFace imprime emojis en sus logs; sin UTF-8 Python falla en consolas cp12
 set PYTHONUTF8=1
 set TF_CPP_MIN_LOG_LEVEL=2
 REM Ajustes privados de este equipo (PIN del staff, etc.): copia config.local.example.bat a config.local.bat.
-if exist "config.local.bat" call "config.local.bat"
+if exist "%~dp0config.local.bat" call "%~dp0config.local.bat"
 if not exist ".venv\Scripts\python.exe" (
     echo No se encontro el entorno virtual .venv. Revisa el README.
     pause

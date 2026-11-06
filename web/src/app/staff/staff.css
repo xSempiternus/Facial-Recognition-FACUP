@@ -200,6 +200,44 @@
   background: var(--brand-grad);
   box-shadow: 0 4px 14px -4px rgb(0 141 54 / 0.7), inset 0 1px 0 rgb(255 255 255 / 0.35);
 }
+/* Logo real de FA CUP: la imagen blanca se usa como máscara para poder teñirla según el tema. */
+.s-logo-full {
+  flex: none;
+  display: block;
+  width: 94px;
+  height: 20px;
+  background: #fff;
+  -webkit-mask: url("/logo-blanco.png") left center / contain no-repeat;
+  mask: url("/logo-blanco.png") left center / contain no-repeat;
+}
+.s-brand-t {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  background: rgb(255 255 255 / 0.07);
+}
+.s-logo-chico {
+  display: none;
+}
+.s-collapsed .s-logo-full,
+.s-collapsed .s-brand-t {
+  display: none;
+}
+.s-collapsed .s-logo-chico {
+  display: block;
+}
+@media (prefers-color-scheme: light) {
+  .s-logo-full {
+    background: #008d36;
+  }
+  .s-brand-t {
+    background: rgb(0 0 0 / 0.05);
+  }
+}
 .s-nav {
   flex: 1;
   padding: 4px 10px;

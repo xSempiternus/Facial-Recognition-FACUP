@@ -21,7 +21,7 @@ foreach ($p in 3000, 8000) {
 
 # Evita que el PC se suspenda mientras este script corre (sin tocar la configuracion global de energia).
 Add-Type -Namespace Win -Name Power -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);'
-[void][Win.Power]::SetThreadExecutionState(0x80000001)   # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+[void][Win.Power]::SetThreadExecutionState([uint32]2147483649)   # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
 
 $hijos = @()
 $log = Join-Path $env:TEMP 'cloudflared-demo.log'
@@ -68,5 +68,5 @@ try {
 }
 finally {
     foreach ($h in $hijos) { if ($h -and -not $h.HasExited) { & taskkill /PID $h.Id /T /F *> $null } }
-    [void][Win.Power]::SetThreadExecutionState(0x80000000)
+    [void][Win.Power]::SetThreadExecutionState([uint32]2147483648)
 }

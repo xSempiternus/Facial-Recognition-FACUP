@@ -16,3 +16,7 @@ REM Origenes permitidos por CORS, separados por coma (por defecto solo localhost
 REM set CORS_ORIGINS=http://localhost:3000
 
 REM TRUST_PROXY=1 lo define iniciar-demo.bat solo (la API esta detras del tunel de Cloudflare). No hace falta ponerlo aqui.
+
+REM Voz natural (Gemini TTS): clave gratuita en https://aistudio.google.com/apikey
+REM set GEMINI_API_KEY=pega_tu_clave
+REM set GEMINI_VOZ=Fenrir

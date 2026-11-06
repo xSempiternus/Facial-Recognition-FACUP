@@ -7,9 +7,11 @@
 // al quedarse quieto, la foto se saca sola. En escritorio / horizontal la cámara vive en un escenario vertical (~3:4).
 
 import { AnimatePresence, motion, MotionConfig, useMotionValue, type MotionValue } from "motion/react";
+import { ChevronLeft } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { desbloquearVoz, hablar } from "@/lib/voz";
+import { iniciarSonidos, sonar } from "@/lib/sonidos";
+import { desbloquearVoz, hablar, type Frase } from "@/lib/voz";
 import { llegadasDeHoy, precalentar, verificar, type Verificacion } from "@/lib/api";
 import { calidadActual, iniciarCalidad, restriccionesCamara, useCalidad } from "./calidad";
 import Aurora, { type ModoAurora } from "./Aurora";
@@ -88,29 +90,29 @@ function useTamañoPantalla() {
   return { ancho, alto };
 }
 
-function aResultado(v: Verificacion): { resultado: Resultado; frase: string | null } {
+function aResultado(v: Verificacion): { resultado: Resultado; frase: Frase | null } {
   if (v.ok) {
     const nombre = v.nombre.split(" ")[0];
     const horaReg = v.registradoALas?.slice(11, 16);
     if (v.yaRegistrado) {
       return {
         resultado: { tono: "exito", sobrio: true, titulo: nombre, grande: true, detalle: v.categoria, hora: horaReg ? `Hoy a las ${horaReg}` : "Hoy" },
-        frase: `¡Hola de nuevo, ${nombre}!`,
+        frase: { texto: `¡Hola de nuevo, ${nombre}!`, tipo: "de_nuevo", nombre },
       };
     }
     const ahora = new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
     return {
       resultado: { tono: "exito", titulo: nombre, grande: true, detalle: v.categoria, saludo: animo(), hora: `Llegada ${ahora}` },
-      frase: `¡Hola, ${nombre}! ¡A jugar!`,
+      frase: { texto: `¡Hola, ${nombre}! ¡A jugar!`, tipo: "hola", nombre },
     };
   }
   switch (v.codigo) {
     case "sin_rostro":
-      return { resultado: { tono: "aviso", titulo: "No detectamos tu cara", sub: "Mira de frente a la cámara, con buena luz" }, frase: "No detectamos tu cara. Prueba otra vez." };
+      return { resultado: { tono: "aviso", titulo: "No detectamos tu cara", sub: "Mira de frente a la cámara, con buena luz" }, frase: { texto: "No detectamos tu cara. Prueba otra vez.", tipo: "sin_cara" } };
     case "foto_falsa":
-      return { resultado: { tono: "aviso", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara" }, frase: "Usa tu cara, no una foto." };
+      return { resultado: { tono: "aviso", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara" }, frase: { texto: "Usa tu cara, no una foto.", tipo: "foto" } };
     case "no_reconocido":
-      return { resultado: { tono: "aviso", titulo: "No te reconocimos", sub: "Intenta de nuevo o avisa a tu entrenador" }, frase: "No te reconocimos. Intenta de nuevo o avisa a tu entrenador." };
+      return { resultado: { tono: "aviso", titulo: "No te reconocimos", sub: "Intenta de nuevo o avisa a tu entrenador" }, frase: { texto: "No te reconocimos. Intenta de nuevo o avisa a tu entrenador.", tipo: "no_reconocido" } };
     case "sin_conexion":
       return { resultado: { tono: "aviso", titulo: "Sin conexión", sub: "Revisa tu internet e intenta de nuevo" }, frase: null };
     case "sin_jugadores":
@@ -196,10 +198,10 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const voz = useRef(true);
   const prueba = useRef(false);
 
-  // ?voz=0 apaga el saludo hablado. ?prueba=1 deja el resultado en pantalla hasta tocarla (para el staff).
+  // La voz está apagada por defecto (suenan los efectos); ?voz=1 la enciende. ?prueba=1 deja el resultado en pantalla hasta tocarla (para el staff).
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    voz.current = q.get("voz") !== "0";
+    voz.current = q.get("voz") === "1";
     prueba.current = q.get("prueba") === "1";
   }, []);
 
@@ -207,8 +209,13 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   useEffect(() => {
     iniciarCalidad();
     precalentar();
-    window.addEventListener("pointerdown", desbloquearVoz, { once: true });
-    return () => window.removeEventListener("pointerdown", desbloquearVoz);
+    const alToque = () => {
+      desbloquearVoz();
+      iniciarSonidos();
+    };
+    iniciarSonidos(); // si ya hubo un gesto en el menú, el contexto existe y solo se reanuda
+    window.addEventListener("pointerdown", alToque, { once: true });
+    return () => window.removeEventListener("pointerdown", alToque);
   }, []);
 
   // Pantalla siempre encendida (kiosko). Se pierde al ocultar la pestaña: se vuelve a pedir al volver.
@@ -482,6 +489,21 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const hayError = sinCamara || (resultadoVisible && tono === "error");
   const T = k();
 
+  // Sonidos de la secuencia: cara detectada -> bloqueo (empieza el escaneo) -> captura -> resultado.
+  const anterior = useRef<{ postura: Postura; fase: string }>({ postura: "sin-cara", fase: "escaneando" });
+  useEffect(() => {
+    const a = anterior.current;
+    if (fase === "escaneando" && a.postura === "sin-cara" && postura !== "sin-cara") sonar("rostro");
+    if (fase === "escaneando" && postura === "quieto" && a.postura !== "quieto") sonar("bloqueo");
+    if (fase === "enviando" && a.fase !== "enviando") sonar("captura");
+    anterior.current = { postura, fase };
+  }, [postura, fase]);
+  useEffect(() => {
+    if (!resultadoVisible) return;
+    sonar(exito ? (sobrio ? "ya" : "exito") : tono === "aviso" ? "aviso" : "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- suena una vez por resultado nuevo
+  }, [resultado, resultadoVisible]);
+
   // Texto de arriba (guía) y tarjeta de abajo (resultado).
   const cartaTexto: TextoTarjeta | null = sinCamara
     ? {
@@ -614,6 +636,20 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
           <Marco key={`marco${repetir}`} rastro={rastro} modo={modoMarco} guia={guia} ancho={sw} alto={sh} />
 
           {/* Título y subtítulo arriba, con transiciones cortas */}
+          {onSalir && (
+            <button
+              type="button"
+              className="reco-volver"
+              aria-label="Volver al menú"
+              onClick={(e) => {
+                e.stopPropagation();
+                sonar("volver");
+                onSalir();
+              }}
+            >
+              <ChevronLeft size={22} strokeWidth={2.25} aria-hidden />
+            </button>
+          )}
           <header className="absolute inset-x-0 top-0 z-[4] flex flex-col items-center px-6 pt-[max(1.1rem,env(safe-area-inset-top))] text-center">
             <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="mb-3 h-6 w-auto opacity-90 drop-shadow-[0_2px_8px_rgba(0,0,0,.45)]" />
             <AnimatePresence mode="wait" initial={false}>
@@ -687,37 +723,22 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
               </div>
             )}
 
-            {/* Barra de vidrio: llegadas de hoy y Salir */}
-            <motion.div
-              className="cristal flex min-h-[60px] w-full max-w-[460px] items-center justify-between gap-3 py-2 pl-5 pr-2"
-              style={{ borderRadius: 30 }}
-              initial={{ opacity: 0, y: 12 }}
+            {/* Llegadas de hoy: texto suelto sobre la foto, sin barra */}
+            <motion.p
+              className="reco-texto flex items-center gap-2 pb-1 text-[0.95rem] font-medium text-white/80"
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ type: "spring", stiffness: 200, damping: 26 }}
             >
-              <p className="flex items-center gap-2.5 text-[0.95rem] font-medium text-texto-2">
-                {hoyMostrado !== null ? (
-                  <>
-                    <Rodillo valor={hoyMostrado} className="text-[1.7rem] font-semibold leading-none tracking-[-0.03em] text-texto" />
-                    <span className="whitespace-nowrap">{hoyMostrado === 1 ? "llegada hoy" : "llegadas hoy"}</span>
-                  </>
-                ) : (
-                  <span className="text-texto-3">Llegadas de hoy</span>
-                )}
-              </p>
-              {onSalir && (
-                <button
-                  type="button"
-                  className="reco-salir"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSalir();
-                  }}
-                >
-                  Salir
-                </button>
+              {hoyMostrado !== null ? (
+                <>
+                  <Rodillo valor={hoyMostrado} className="text-[1.5rem] font-semibold leading-none tracking-[-0.03em] text-white" />
+                  <span className="whitespace-nowrap">{hoyMostrado === 1 ? "llegada hoy" : "llegadas hoy"}</span>
+                </>
+              ) : (
+                <span className="text-white/60">Llegadas de hoy</span>
               )}
-            </motion.div>
+            </motion.p>
           </div>
         </div>
       </main>

@@ -216,7 +216,7 @@ export async function iniciarSesion(pin: string) {
 }
 
 export const api = {
-  salud: () => json<Salud>("/health"),
+  salud: () => json<Salud>("/health/detalle"),
   jugadores: () => json<Jugador[]>("/jugadores"),
   asistencias: (fecha: string) => json<Asistencia[]>(`/asistencias?fecha=${fecha}&limit=1000`),
   pendientes: () => json<Pendiente[]>("/pendientes"),

@@ -578,7 +578,7 @@ def peligro(clave: str):
 
 def estado_servidor():
     """Retorna (ok, health) y lo cachea por ejecución de la página."""
-    return call_api("GET", "/health")
+    return call_api("GET", "/health/detalle")
 
 
 def header(titulo: str, subtitulo: str = "", mostrar_estado: bool = True) -> None:

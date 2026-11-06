@@ -19,6 +19,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from api import auth
+from api.voz import precalentar as precalentar_voz, router as voz_router
 from src import cv_engine, db_manager, reportes
 
 log = logging.getLogger("uvicorn.error")
@@ -105,6 +106,10 @@ def _purgar_pendientes() -> None:
         del _pendientes[min(_pendientes)]
 
 
+def _primeros_nombres() -> list[str]:
+    return sorted({j["nombre"].split()[0] for j in _jugadores_cache.values() if j["nombre"].split()})
+
+
 async def _respaldo_diario():
     """Un respaldo automático al día (al arrancar y luego revisando cada hora)."""
     while True:
@@ -124,13 +129,25 @@ async def lifespan(app: FastAPI):
     _reload_cache()
     await run_in_threadpool(cv_engine.warmup)
     tarea = asyncio.create_task(_respaldo_diario())
+    voces = asyncio.create_task(precalentar_voz(_primeros_nombres()))
     yield
     tarea.cancel()
+    voces.cancel()
 
 
 STAFF = [Depends(auth.requerir_staff)]
 
-app = FastAPI(title="Asistencia Liga Infantil - Reconocimiento Facial", lifespan=lifespan)
+# La documentación interactiva (/docs, /redoc, /openapi.json) queda apagada: no hay motivo para publicar el mapa de la API.
+# Para desarrollo local: ENABLE_DOCS=1.
+_DOCS = os.getenv("ENABLE_DOCS") == "1"
+app = FastAPI(
+    title="Asistencia Liga Infantil - Reconocimiento Facial",
+    lifespan=lifespan,
+    docs_url="/docs" if _DOCS else None,
+    redoc_url="/redoc" if _DOCS else None,
+    openapi_url="/openapi.json" if _DOCS else None,
+)
+app.include_router(voz_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -179,6 +196,12 @@ async def _analyze(file: UploadFile, miniatura: bool = False, n_foto: int | None
 
 @app.get("/health")
 def health():
+    """Público (túneles, monitores): solo dice que la API vive, sin datos del sistema."""
+    return {"status": "ok"}
+
+
+@app.get("/health/detalle", dependencies=STAFF)
+def health_detalle():
     compatibles = len(_plantillas_actuales())
     _purgar_pendientes()
     return {
@@ -298,6 +321,8 @@ async def enroll(
                                            consentimiento_tutor=tutor if consentimiento and tutor else None)
     _jugadores_cache[jugador_id] = {"nombre": nombre, "categoria": categoria,
                                     "plantillas": [(modelo, e) for e in embeddings]}
+    if nombre.split():
+        asyncio.create_task(precalentar_voz([nombre.split()[0]]))  # voz lista antes de que llegue a la cancha
     return {
         "status": "success",
         "id": jugador_id,

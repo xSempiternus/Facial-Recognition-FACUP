@@ -1,6 +1,8 @@
 // Cliente de la API para el panel del staff. Todas las llamadas (salvo el login) llevan el token de sesión.
 // Nada de lo que pasa por aquí se registra en consola: son datos de menores.
 
+import { fijarSede, rutaSede, sedeActual, sedeGuardada } from "@/lib/sede";
+
 const CLAVE = "facup-staff";
 const EVENTO = "facup-staff-sesion";
 
@@ -69,22 +71,44 @@ export class ApiError extends Error {
   }
 }
 
+/** Mensajes en lenguaje simple para los códigos del backend que el staff puede ver. */
+const MENSAJES: Record<string, string> = {
+  sin_conexion: "No hay conexión con el servidor. Revisa la red e inténtalo de nuevo.",
+  demasiados_intentos: "Demasiados intentos seguidos. Espera un par de minutos y vuelve a intentar.",
+  modelo_distinto:
+    "Esta solicitud se procesó con otro modelo de reconocimiento y ya no se puede aprobar. Recházala y envía un enlace nuevo a la familia.",
+  es_invitado:
+    "Es un invitado y todavía no tiene autorización de imagen. Primero aprueba la solicitud de inscripción de su familia.",
+  ya_anulada: "Esa asistencia ya estaba anulada.",
+  no_es_invitado: "Ese jugador ya está inscrito; no se puede vincular como invitado.",
+  error_servidor: "El servidor tuvo un problema. Inténtalo de nuevo en un momento.",
+  no_autorizado: "Sesión vencida. Ingresa de nuevo con el PIN.",
+};
+
+export function mensajeDe(codigo: string, status: number, original?: string): string {
+  if (MENSAJES[codigo]) return MENSAJES[codigo];
+  if (status === 429) return MENSAJES.demasiados_intentos;
+  if (status >= 500) return MENSAJES.error_servidor;
+  return original || `Error del servidor (${status}).`;
+}
+
+/** Texto listo para mostrar al staff a partir de cualquier error. */
+export function textoError(e: unknown, porDefecto = "No se pudo completar la acción."): string {
+  return e instanceof ApiError ? e.message : porDefecto;
+}
+
 async function comoError(resp: Response): Promise<ApiError> {
   const data = await resp.json().catch(() => ({}));
   const d = data && typeof data.detail === "object" && data.detail ? data.detail : {};
   const { codigo, mensaje, ...extra } = d as Record<string, unknown>;
-  return new ApiError(
-    resp.status,
-    typeof codigo === "string" ? codigo : resp.status >= 500 ? "error_servidor" : "error",
-    typeof mensaje === "string" ? mensaje : `Error del servidor (${resp.status}).`,
-    extra,
-  );
+  const cod = typeof codigo === "string" ? codigo : resp.status >= 500 ? "error_servidor" : "error";
+  return new ApiError(resp.status, cod, mensajeDe(cod, resp.status, typeof mensaje === "string" ? mensaje : undefined), extra);
 }
 
 function expulsar() {
   cerrarSesion();
-  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- recarga completa: descarta todo estado en memoria
-  if (window.location.pathname !== "/") window.location.assign("/");
+  const destino = rutaSede(sedeGuardada(), "/");
+  if (window.location.pathname !== destino) window.location.assign(destino);
 }
 
 /** fetch con el token inyectado; ante 401 limpia la sesión y manda al login. */
@@ -97,7 +121,7 @@ export async function apiFetch(ruta: string, init: RequestInit = {}): Promise<Re
     resp = await fetch(`/api${ruta}`, { ...init, headers, cache: "no-store" });
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") throw e;
-    throw new ApiError(0, "sin_conexion", "No se pudo conectar con el servidor.");
+    throw new ApiError(0, "sin_conexion", MENSAJES.sin_conexion);
   }
   if (resp.status === 401) {
     expulsar();
@@ -130,6 +154,8 @@ export type Jugador = {
   ultima_asistencia: string | null;
   fotos: number;
   compatible: boolean;
+  estado: "activo" | "invitado";
+  tiene_consentimiento: boolean;
 };
 
 export type Asistencia = {
@@ -138,15 +164,52 @@ export type Asistencia = {
   nombre: string;
   categoria: string | null;
   timestamp: string;
-  origen: "facial" | "manual" | "correccion" | null;
+  origen: "facial" | "manual" | "correccion" | "invitado" | null;
+  jugador_estado?: "activo" | "invitado";
+  estado?: "valida" | "disputada" | "anulada";
+  motivo?: string | null;
 };
 
 export type Pendiente = {
   id: number;
   timestamp: string;
   miniatura: string;
+  motivo?: "no_reconocido" | "no_soy_yo";
   sugerido: { id: number; nombre: string; similitud: number } | null;
+  disputa_de?: { id: number; nombre: string | null } | null;
 };
+
+export type Solicitud = {
+  id: number;
+  codigo: string;
+  creado_en: string;
+  nombre_nino: string;
+  anio_nacimiento: number | null;
+  categoria: string | null;
+  tutor_nombre: string;
+  tutor_contacto: string;
+  fotos: number;
+  compatible: boolean;
+  miniatura: string;
+  duplicado: { jugador_id: number; nombre: string; estado: string; similitud: number | null } | null;
+  duplicado_solicitud: { solicitud_id: number; similitud: number | null } | null;
+};
+
+export type Enlace = {
+  id: number;
+  categoria: string | null;
+  creado_en: string;
+  expira: string;
+  revocado_en: string | null;
+  estado: "activo" | "vencido" | "revocado";
+  solicitudes_pendientes: number;
+};
+
+export type EnlaceNuevo = { id: number; token: string; ruta: string; expira: string; categoria: string | null };
+
+export type Auditoria = { id: number; fecha: string; accion: string; detalle: string | null };
+
+export type Disputa = "confirmada" | "anulada" | "sin_asistencia" | null;
 
 export type TipoJornada = "entrenamiento" | "partido";
 
@@ -154,6 +217,7 @@ export type FilaReporte = {
   id: number;
   nombre: string;
   categoria: string | null;
+  estado?: "activo" | "invitado";
   presentes: number;
   posibles: number;
   porcentaje: number | null;
@@ -182,6 +246,8 @@ export type Config = {
 
 export type Respaldo = { nombre: string; bytes: number; creado: string };
 
+export type Categoria = { id: number; nombre: string; orden: number; activa: boolean; jugadores: number };
+
 export type Salud = {
   status: string;
   jugadores: number;
@@ -203,29 +269,68 @@ export type ResultadoInscripcion = {
 
 // ------------------------------------------------------------------ endpoints
 
-export async function iniciarSesion(pin: string) {
+export async function iniciarSesion(pin: string, sede?: string) {
   let resp: Response;
+  const slug = sede ?? sedeActual();
   try {
-    resp = await fetch("/api/auth/login", { method: "POST", body: form({ pin }), cache: "no-store" });
+    resp = await fetch("/api/auth/login", {
+      method: "POST",
+      body: form(slug ? { pin, sede: slug } : { pin }),
+      cache: "no-store",
+    });
   } catch {
     throw new ApiError(0, "sin_conexion", "No se pudo conectar con el servidor.");
   }
   if (!resp.ok) throw await comoError(resp);
-  const data = (await resp.json()) as { token: string; expira_en: number };
+  const data = (await resp.json()) as { token: string; expira_en: number; sede?: { slug: string; nombre: string } };
+  if (data.sede?.slug) fijarSede(data.sede.slug, data.sede.nombre);
   guardarSesion(data.token, data.expira_en);
 }
 
 export const api = {
   salud: () => json<Salud>("/health/detalle"),
   jugadores: () => json<Jugador[]>("/jugadores"),
-  asistencias: (fecha: string) => json<Asistencia[]>(`/asistencias?fecha=${fecha}&limit=1000`),
+  asistencias: (fecha: string, todas = false) =>
+    json<Asistencia[]>(`/asistencias?fecha=${fecha}&limit=1000${todas ? "&todas=true" : ""}`),
+  anularAsistencia: (id: number, motivo: string) =>
+    json<unknown>(`/asistencias/${id}`, { method: "DELETE", body: form({ motivo }) }),
+  editarJugador: (id: number, d: { nombre?: string; categoria?: string | null }) => {
+    const c: Record<string, string | boolean> = {};
+    if (d.nombre !== undefined) c.nombre = d.nombre;
+    if (d.categoria === null) c.sin_categoria = true;
+    else if (d.categoria !== undefined) c.categoria = d.categoria;
+    return json<unknown>(`/jugadores/${id}`, { method: "PATCH", body: form(c) });
+  },
+  crearInvitado: (nombre: string, categoria: string) =>
+    json<{ id: number; nombre: string; categoria: string | null }>("/invitados", {
+      method: "POST",
+      body: form({ nombre, categoria }),
+    }),
+  pendienteAInvitado: (id: number, nombre: string, categoria: string) =>
+    json<{ id: number; nombre: string; disputa: Disputa }>(`/pendientes/${id}/invitado`, {
+      method: "POST",
+      body: form({ nombre, categoria }),
+    }),
+  auditoria: () => json<Auditoria[]>("/auditoria"),
+  solicitudes: () => json<Solicitud[]>("/solicitudes"),
+  aprobarSolicitud: (id: number, d: { nombre: string; categoria: string; invitadoId?: number }) =>
+    json<{ id: number; nombre: string; fotos: number; invitado_convertido: boolean }>(`/solicitudes/${id}/aprobar`, {
+      method: "POST",
+      body: form({ nombre: d.nombre, categoria: d.categoria, ...(d.invitadoId ? { invitado_id: d.invitadoId } : {}) }),
+    }),
+  rechazarSolicitud: (id: number, motivo: string) =>
+    json<unknown>(`/solicitudes/${id}/rechazar`, { method: "POST", body: form({ motivo }) }),
+  enlaces: () => json<Enlace[]>("/inscripcion/enlaces"),
+  crearEnlace: (categoria: string, dias: number) =>
+    json<EnlaceNuevo>("/inscripcion/enlaces", { method: "POST", body: form({ categoria, dias }) }),
+  revocarEnlace: (id: number) => json<unknown>(`/inscripcion/enlaces/${id}`, { method: "DELETE" }),
   pendientes: () => json<Pendiente[]>("/pendientes"),
   asignarPendiente: (id: number, jugadorId: number) =>
-    json<{ nombre: string; ya_registrado: boolean; foto_guardada: boolean; motivo: string | null }>(
+    json<{ nombre: string; ya_registrado: boolean; foto_guardada: boolean; motivo: string | null; disputa: Disputa }>(
       `/pendientes/${id}/asignar`,
       { method: "POST", body: form({ jugador_id: jugadorId }) },
     ),
-  descartarPendiente: (id: number) => json<unknown>(`/pendientes/${id}`, { method: "DELETE" }),
+  descartarPendiente: (id: number) => json<{ disputa: Disputa }>(`/pendientes/${id}`, { method: "DELETE" }),
   marcarAsistencia: (jugadorId: number) =>
     json<{ nombre: string; ya_registrado: boolean }>("/asistencia/manual", {
       method: "POST",
@@ -262,6 +367,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(c),
     }),
+  categorias: () => json<Categoria[]>("/categorias"),
+  crearCategoria: (nombre: string) => json<Categoria>("/categorias", { method: "POST", body: form({ nombre }) }),
+  renombrarCategoria: (c: Categoria, nombre: string) =>
+    json<Categoria>(`/categorias/${c.id}`, { method: "PATCH", body: form({ nombre }) }),
+  desactivarCategoria: (c: Categoria) => json<Categoria>(`/categorias/${c.id}`, { method: "DELETE" }),
+  reactivarCategoria: (c: Categoria) => json<Categoria>(`/categorias/${c.id}`, { method: "PATCH", body: form({ activa: true }) }),
   respaldos: () => json<Respaldo[]>("/respaldos"),
   crearRespaldo: () => json<{ nombre: string }>("/respaldos", { method: "POST" }),
 };
@@ -295,8 +406,6 @@ export function descargarCsv(nombre: string, filas: (string | number | null)[][]
 
 // ------------------------------------------------------------------ utilidades de fecha/formato
 
-export const CATEGORIAS = ["Sub-6", "Sub-8", "Sub-10", "Sub-12", "Sub-14", "Sub-16"];
-
 export function ordenarCategorias(cats: Iterable<string>): string[] {
   const num = (c: string) => {
     const d = c.replace(/\D/g, "");
@@ -326,3 +435,17 @@ export function sumarDias(iso: string, n: number): string {
 export const diaMes = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 export const hora = (ts: string) => ts.slice(11, 16);
 export const fechaHora = (ts: string) => `${diaMes(ts.slice(0, 10))} ${hora(ts)}`;
+
+/** URL absoluta de un enlace de inscripción (la ruta viene del backend, el origen del navegador). */
+export const urlEnlace = (ruta: string) => `${window.location.origin}${ruta}`;
+
+// Aviso entre páginas y el menú: cantidad de solicitudes pendientes (para el globo del menú).
+const EVENTO_SOL = "facup-solicitudes";
+export function publicarPendientes(n: number) {
+  window.dispatchEvent(new CustomEvent(EVENTO_SOL, { detail: n }));
+}
+export function escucharPendientes(cb: (n: number) => void) {
+  const f = (e: Event) => cb((e as CustomEvent<number>).detail);
+  window.addEventListener(EVENTO_SOL, f);
+  return () => window.removeEventListener(EVENTO_SOL, f);
+}

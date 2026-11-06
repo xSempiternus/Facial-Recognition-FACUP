@@ -35,7 +35,7 @@ function Nombre({ texto, resultado, izquierda }: { texto: string; resultado: boo
   // Tamaño fluido según el ancho de la tarjeta (cqw) y el largo del nombre: "Maximiliano" cabe igual que "Ana".
   const tam = `clamp(2.1rem, min(17cqw, ${(86 / (largo * 0.56)).toFixed(1)}cqw), 5.2rem)`;
   return (
-    <h1
+    <h2
       className={`font-bold leading-[1] tracking-[-0.04em] text-texto [text-wrap:balance] ${izquierda ? "text-left" : "text-center"}`}
       style={{ fontSize: tam }}
     >
@@ -51,7 +51,7 @@ function Nombre({ texto, resultado, izquierda }: { texto: string; resultado: boo
           {i < palabras.length - 1 ? " " : ""}
         </motion.span>
       ))}
-    </h1>
+    </h2>
   );
 }
 
@@ -112,7 +112,7 @@ export default function Tarjeta({ texto, tono, sobrio = false, izquierda = false
               </>
             ) : (
               <>
-                <h1 className={`font-semibold leading-tight tracking-[-0.025em] text-texto [text-wrap:balance] text-[clamp(1.4rem,7cqw,2.6rem)]`}>{texto.titulo}</h1>
+                <h2 className={`font-semibold leading-tight tracking-[-0.025em] text-texto [text-wrap:balance] text-[clamp(1.4rem,7cqw,2.6rem)]`}>{texto.titulo}</h2>
                 {texto.sub && (
                   <p className="max-w-[34ch] [text-wrap:balance] text-[clamp(1rem,4.2cqw,1.35rem)] leading-snug text-texto-2">{texto.sub}</p>
                 )}

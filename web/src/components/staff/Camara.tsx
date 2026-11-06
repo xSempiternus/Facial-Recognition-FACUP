@@ -1,7 +1,8 @@
 "use client";
 
-import { Camera as CamIcon, CameraOff, ImageUp, RotateCw } from "lucide-react";
+import { Camera as CamIcon, CameraOff, ImageUp, RotateCw, SwitchCamera } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { abrirCamara, contarCamaras, guardarFacing, leerFacing, type Facing } from "@/lib/camara";
 import { Button } from "./ui";
 
 function mensajeError(e: unknown) {
@@ -23,7 +24,7 @@ function useDemo() {
   );
 }
 
-/** Cámara del navegador (frontal). `onCaptura` recibe un JPEG; si no hay cámara, deja elegir un archivo. */
+/** Cámara del navegador (frontal o trasera). `onCaptura` recibe un JPEG; si no hay cámara, deja elegir un archivo. */
 export function Camara({
   onCaptura,
   etiqueta = "Tomar foto",
@@ -43,6 +44,9 @@ export function Camara({
   const [textoError, setTextoError] = useState("");
   const [intento, setIntento] = useState(0);
   const estado = demo ? "lista" : estadoReal;
+  const [facing, setFacing] = useState<Facing>(leerFacing);
+  const [espejo, setEspejo] = useState(true); // solo la vista previa de la frontal se espeja; la captura nunca
+  const [varias, setVarias] = useState(false);
 
   useEffect(() => {
     if (demo) return;
@@ -52,19 +56,15 @@ export function Camara({
     (async () => {
       try {
         if (!navigator.mediaDevices?.getUserMedia) throw new Error("sin_api");
-        let f: MediaStream;
-        try {
-          f = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 } }, audio: false });
-        } catch (e) {
-          if (e instanceof DOMException && (e.name === "OverconstrainedError" || e.name === "ConstraintNotSatisfiedError")) {
-            f = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-          } else throw e;
-        }
+        const r = await abrirCamara(facing, { width: { ideal: 1280 } });
+        const f = r.stream;
         if (!vivo) {
           f.getTracks().forEach((t) => t.stop());
           return;
         }
         flujo = f;
+        setEspejo(r.facing === "user");
+        contarCamaras().then((n) => vivo && setVarias(n > 1)); // tras el permiso (iOS: antes los labels van vacíos)
         // iOS suspende la cámara al ocultar la app: si el track termina estando visible, se vuelve a abrir.
         f.getVideoTracks().forEach((t) =>
           t.addEventListener("ended", () => vivo && document.visibilityState === "visible" && setIntento((n) => n + 1)),
@@ -90,17 +90,27 @@ export function Camara({
       else video.current?.play().catch(() => {});
     };
     document.addEventListener("visibilitychange", alVolver);
+    const alCambiarDispositivos = () => contarCamaras().then((n) => vivo && setVarias(n > 1));
+    navigator.mediaDevices?.addEventListener?.("devicechange", alCambiarDispositivos);
     return () => {
       vivo = false;
       document.removeEventListener("visibilitychange", alVolver);
+      navigator.mediaDevices?.removeEventListener?.("devicechange", alCambiarDispositivos);
       flujo?.getTracks().forEach((t) => t.stop());
       if (el) el.srcObject = null;
     };
-  }, [demo, intento]);
+  }, [demo, intento, facing]);
 
   function reintentar() {
     setEstado("iniciando");
     setIntento((n) => n + 1);
+  }
+
+  function voltear() {
+    const nuevo: Facing = facing === "user" ? "environment" : "user";
+    guardarFacing(nuevo);
+    setEstado("iniciando");
+    setFacing(nuevo); // el efecto detiene el stream anterior y pide el nuevo
   }
 
   function capturar() {
@@ -132,8 +142,13 @@ export function Camara({
   return (
     <div className={fija ? "s-camwrap fija" : "s-camwrap"}>
       <div className="s-cam">
-        <video ref={video} autoPlay playsInline muted aria-label="Vista de la cámara" style={{ display: estado === "lista" ? "block" : "none" }} />
+        <video ref={video} autoPlay playsInline muted aria-label="Vista de la cámara" style={{ display: estado === "lista" ? "block" : "none", transform: espejo ? undefined : "none" }} />
         {estado === "lista" && <div className="guide" aria-hidden />}
+        {varias && !demo && estado !== "error" && (
+          <Button icono variante="ghost" className="s-flip" aria-label="Voltear cámara (frontal o trasera)" onClick={voltear} disabled={estado === "iniciando" || deshabilitado}>
+            <SwitchCamera size={18} aria-hidden />
+          </Button>
+        )}
         {demo && <div className="msg demo" aria-hidden>Vista simulada (demo)</div>}
         {estado === "iniciando" && <div className="msg">Encendiendo la cámara…</div>}
         {estado === "error" && (

@@ -1,7 +1,9 @@
+import { cabeceraSede } from "@/lib/sede";
+
 // Cliente de la API de reconocimiento (FastAPI). Next la expone en /api/* (ver next.config.ts).
 
 export type Verificacion =
-  | { ok: true; nombre: string; categoria: string | null; yaRegistrado: boolean; registradoALas: string | null; similitud?: number }
+  | { ok: true; nombre: string; categoria: string | null; yaRegistrado: boolean; registradoALas: string | null; similitud?: number; reporte?: string }
   | { ok: false; codigo: string; mensaje: string; similitud?: number };
 
 const TIEMPO_MAX_MS = 18_000; // por intento (datos móviles lentos)
@@ -10,7 +12,7 @@ const ESPERA_REINTENTO_MS = 900;
 
 /** Calienta la conexión (DNS/TLS/HTTP2) con el servidor antes de la primera foto. */
 export function precalentar() {
-  fetch("/api/kiosko/resumen", { cache: "no-store" }).catch(() => {});
+  fetch("/api/kiosko/resumen", { cache: "no-store", headers: cabeceraSede() }).catch(() => {});
 }
 
 const pausa = (ms: number, señal?: AbortSignal) =>
@@ -26,7 +28,7 @@ async function enviarUnaVez(form: FormData, señal?: AbortSignal): Promise<Respo
   const cancelar = () => ctl.abort();
   señal?.addEventListener("abort", cancelar, { once: true });
   try {
-    return await fetch("/api/verify", { method: "POST", body: form, signal: ctl.signal });
+    return await fetch("/api/verify", { method: "POST", body: form, signal: ctl.signal, headers: cabeceraSede() });
   } catch {
     return null;
   } finally {
@@ -58,6 +60,7 @@ export async function verificar(foto: Blob, señal?: AbortSignal, alReintentar?:
       yaRegistrado: Boolean(data.ya_registrado),
       registradoALas: data.registrado_a_las ?? null,
       similitud: data.similitud,
+      reporte: typeof data.reporte === "string" ? data.reporte : undefined,
     };
   }
   const detalle = typeof data?.detail === "object" && data.detail ? data.detail : {};
@@ -74,12 +77,39 @@ export async function llegadasDeHoy(): Promise<number | null> {
   const ctl = new AbortController();
   const id = setTimeout(() => ctl.abort(), 8_000);
   try {
-    const resp = await fetch("/api/kiosko/resumen", { cache: "no-store", signal: ctl.signal });
+    const resp = await fetch("/api/kiosko/resumen", { cache: "no-store", signal: ctl.signal, headers: cabeceraSede() });
     if (!resp.ok) return null;
     const data = await resp.json();
     return typeof data?.llegadas_hoy === "number" ? data.llegadas_hoy : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+export type InfoSede = { slug: string; nombre: string; categorias: string[] };
+
+/** Datos públicos de una sede. null = no existe (404); lanza si el servidor no responde. */
+export async function infoSede(slug: string): Promise<InfoSede | null> {
+  const resp = await fetch(`/api/sedes/${encodeURIComponent(slug)}`, { cache: "no-store" });
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`sede ${resp.status}`);
+  return (await resp.json()) as InfoSede;
+}
+
+/** "¿No eres tú?": avisa al staff con el reporte de un solo uso que devolvió /verify. "limite" = 429; "red" = sin conexión. */
+export async function noSoyYo(reporte: string): Promise<"ok" | "limite" | "red"> {
+  const ctl = new AbortController();
+  const id = setTimeout(() => ctl.abort(), 10_000);
+  try {
+    const form = new FormData();
+    form.append("reporte", reporte);
+    const resp = await fetch("/api/verify/no-soy-yo", { method: "POST", body: form, signal: ctl.signal, headers: cabeceraSede() });
+    if (resp.status === 429) return "limite";
+    return resp.ok ? "ok" : "red";
+  } catch {
+    return "red";
   } finally {
     clearTimeout(id);
   }

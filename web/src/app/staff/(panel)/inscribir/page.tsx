@@ -4,8 +4,9 @@ import { ArrowLeft, ArrowRight, Check, RotateCcw, ShieldCheck, UserPlus } from "
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Camara } from "@/components/staff/Camara";
-import { Alerta, Badge, Button, Campo, Dialogo, PageHeader } from "@/components/staff/ui";
-import { ApiError, CATEGORIAS, api, type ResultadoInscripcion } from "@/lib/staff-api";
+import { BotonAyuda, Tour, type PasoTour } from "@/components/staff/Tour";
+import { Alerta, Badge, Button, Campo, Dialogo, PageHeader, useQuery } from "@/components/staff/ui";
+import { ApiError, api, ordenarCategorias, type ResultadoInscripcion } from "@/lib/staff-api";
 
 const POSES = [
   { titulo: "De frente", corto: "Frente", texto: "Mirando directo a la cámara." },
@@ -13,9 +14,17 @@ const POSES = [
   { titulo: "Un poquito a su derecha", corto: "Derecha", texto: "Igual, pero hacia el otro lado." },
 ];
 
+const PASOS: PasoTour[] = [
+  { selector: "[data-tour='ins-datos']", titulo: "Datos y autorización", texto: "Escribe el nombre y la categoría, y confirma que tienes la autorización firmada del apoderado. Sin ella no se puede guardar la cara.", lado: "der" },
+  { selector: "[data-tour='ins-camara']", titulo: "Tres fotos", texto: "Toma tres fotos: de frente y con un leve giro a cada lado, con buena luz. Si una falla, se repite solo esa.", lado: "der" },
+  { titulo: "¿La familia no está aquí?", texto: "Si el apoderado está en su casa o ya se fue, mejor envíale un enlace o QR desde Inscripciones: él completa todo desde su celular y tú solo apruebas." },
+];
+
 type Foto = { blob: Blob; url: string };
 
 export default function Inscribir() {
+  const cats = useQuery(api.categorias);
+  const categoriasSede = ordenarCategorias((cats.data ?? []).filter((c) => c.activa).map((c) => c.nombre));
   const [paso, setPaso] = useState<1 | 2 | 3>(1);
   const [nombre, setNombre] = useState("");
   const [categoria, setCategoria] = useState("");
@@ -98,6 +107,7 @@ export default function Inscribir() {
   return (
     <>
       <PageHeader titulo="Inscribir jugador" descripcion="Registra a un niño nuevo en 3 pasos.">
+        <BotonAyuda id="inscribir" />
         <ol className="s-steps" style={{ listStyle: "none", margin: 0, padding: 0 }} aria-label="Progreso">
           {pasos.map((p, i) => (
             <li key={p} style={{ display: "contents" }} aria-current={paso === i + 1 ? "step" : undefined}>
@@ -110,8 +120,10 @@ export default function Inscribir() {
         </ol>
       </PageHeader>
 
+      <Tour id="inscribir" pasos={PASOS} />
+
       {paso === 1 && (
-        <form className="s-card s-form" onSubmit={continuar} style={{ maxWidth: 560 }} noValidate>
+        <form data-tour="ins-datos" className="s-card s-form" onSubmit={continuar} style={{ maxWidth: 560 }} noValidate>
           <div className="s-card-b" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <Campo etiqueta="Nombre y apellido">
               {(id) => <input id={id} className="s-input" value={nombre} maxLength={60} placeholder="Ej: Sofía Pérez" onChange={(e) => setNombre(e.target.value)} autoComplete="off" />}
@@ -120,7 +132,7 @@ export default function Inscribir() {
               {(id) => (
                 <select id={id} className="s-select" value={categoria} onChange={(e) => setCategoria(e.target.value)}>
                   <option value="">Sin categoría</option>
-                  {CATEGORIAS.map((c) => (
+                  {categoriasSede.map((c) => (
                     <option key={c}>{c}</option>
                   ))}
                 </select>
@@ -152,7 +164,7 @@ export default function Inscribir() {
 
       {paso === 2 && (
         <div className="s-split even s-ins">
-          <div className="s-card s-ins-cam">
+          <div className="s-card s-ins-cam" data-tour="ins-camara">
             <div className="s-card-h">
               <div>
                 <h2>{fotos.length < 3 ? `Foto ${fotos.length + 1} de 3: ${POSES[fotos.length].titulo}` : "Las 3 fotos están listas"}</h2>

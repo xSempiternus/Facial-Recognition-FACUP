@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import {
   Avatar,
   Badge,
+  BadgeInvitado,
   Button,
   ErrorCarga,
   FiltroCategorias,
@@ -192,6 +193,7 @@ export default function Reportes() {
                           <div className="s-person">
                             <Avatar nombre={j.nombre} />
                             <b>{j.nombre}</b>
+                            {j.estado === "invitado" && <BadgeInvitado />}
                           </div>
                         </td>
                         <td className="hide-sm muted">{j.categoria ?? "—"}</td>

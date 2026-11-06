@@ -1,141 +1,102 @@
-"""API FastAPI: enrolamiento y verificación facial de jugadores."""
+"""API FastAPI: enrolamiento y verificación facial de jugadores, multi-sede.
+
+Cada sede tiene su propia base, configuración, respaldos, caché de jugadores y pendientes (ver src/sedes.py).
+- Endpoints STAFF: la sede sale SOLO del claim `sede` del token firmado (un token jamás abre otra sede).
+- Endpoints públicos (/verify, /verify/no-soy-yo, /kiosko/resumen, /sedes/{slug}, /inscripcion*): header `X-Sede`
+  (o `?sede=`); sin él, DEFAULT_SEDE.
+Módulos: api/nucleo.py (estado por sede), api/inscripcion.py (enlaces + solicitudes de los padres),
+api/revision.py (pendientes, "No soy yo", invitados, anulaciones, auditoría), api/consentimiento.py (texto).
+"""
 
 import asyncio
-import base64
-import io
-import itertools
-import logging
 import os
 import re
-import time
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from PIL import Image
 from pydantic import BaseModel
 
-from api import auth
+from api import auth, nucleo
+from api.inscripcion import router as inscripcion_router
+from api.nucleo import (Sede, analizar as _analyze, error as _error, log, obtener_sede as _obtener_sede,
+                        precalentar_nombre, sede_publica, sede_staff)
+from api.revision import router as revision_router
 from api.voz import precalentar as precalentar_voz, router as voz_router
-from src import cv_engine, db_manager, reportes
-
-log = logging.getLogger("uvicorn.error")
-
-# Límites de subida (se rechazan antes de la inferencia pesada). /verify es público y el kiosko solo manda
-# fotos de ~720 px, así que ahí el tope es estricto; el staff (con sesión) sube fotos de galería o de cámaras HD.
-MAX_BYTES_IMAGEN = 2 * 1024 * 1024
-MAX_LADO_IMAGEN = 2000
-MAX_BYTES_IMAGEN_STAFF = 15 * 1024 * 1024
-MAX_LADO_IMAGEN_STAFF = 8000
+from src import cv_engine, db_manager, reportes, sedes
 
 # Por debajo de esta fracción del ancho de la imagen, la cara se considera muy lejana.
 MIN_FACE_SIZE = 0.15
 MAX_FOTOS_INSCRIPCION = 5
 # Tolerancia al comparar entre sí las fotos de una misma inscripción (los ángulos laterales se parecen menos).
 TOLERANCIA_INSCRIPCION = 0.10
-# Una corrección del staff solo se guarda como foto del jugador si se parece al menos
-# (umbral - MARGEN_CORRECCION) a sus fotos actuales: protege contra asignaciones equivocadas.
-MARGEN_CORRECCION = 0.25
 # El resultado del camino rápido de retinaface solo se acepta si supera el umbral por al menos este margen.
 MARGEN_VERIFICACION_RAPIDA = 0.05
-# Llegadas no reconocidas que esperan revisión del staff: solo en memoria, se borran solas.
-PENDIENTES_TTL_S = 2 * 3600
-MAX_PENDIENTES = 50
 # Exigir la autorización firmada del tutor para inscribir (datos biométricos de menores).
 REQUIERE_CONSENTIMIENTO = os.getenv("REQUIRE_CONSENT", "1") != "0"
-# Cada cuánto se revisa si ya existe el respaldo automático del día.
+# Cada cuánto se revisa si ya existe el respaldo automático del día (de cada sede) y se purgan retenciones.
 INTERVALO_RESPALDO_S = 3600
-
-# Cache en memoria: {jugador_id: {"nombre", "categoria", "plantillas": [(modelo, embedding), ...]}}
-_jugadores_cache: dict[int, dict] = {}
-# {pendiente_id: {"t", "timestamp", "embedding", "modelo", "miniatura", "sugerido_id", "similitud"}}
-_pendientes: dict[int, dict] = {}
-_pendiente_ids = itertools.count(1)
-
-
-def _threshold() -> float:
-    return cv_engine.config["umbral"]
-
-
-def _reload_cache() -> None:
-    _jugadores_cache.clear()
-    for j in db_manager.get_all_jugadores():
-        _jugadores_cache[j["id"]] = {"nombre": j["nombre"], "categoria": j["categoria"],
-                                     "plantillas": j["plantillas"]}
-
-
-def _plantillas_actuales() -> dict[int, list]:
-    """{jugador_id: [embeddings del modelo actual]}; solo jugadores con al menos una foto comparable."""
-    modelo = cv_engine.config["modelo"]
-    salida = {}
-    for jid, d in _jugadores_cache.items():
-        embs = [e for m, e in d["plantillas"] if m == modelo]
-        if embs:
-            salida[jid] = embs
-    return salida
-
-
-def _agregar_plantilla(jugador_id: int, embedding: list[float], origen: str) -> None:
-    modelo = cv_engine.config["modelo"]
-    db_manager.add_foto(jugador_id, embedding, modelo, origen)
-    plantillas = _jugadores_cache[jugador_id]["plantillas"]
-    plantillas.append((modelo, embedding))
-    # Si se superó el límite, la BD descartó alguna foto: se relee para que la cache coincida.
-    if sum(1 for m, _ in plantillas if m == modelo) > db_manager.MAX_FOTOS:
-        _jugadores_cache[jugador_id]["plantillas"] = next(
-            j["plantillas"] for j in db_manager.get_all_jugadores() if j["id"] == jugador_id)
-
-
-def _error(status: int, codigo: str, mensaje: str, **extra):
-    """Errores con código legible por la UI: {"detail": {"codigo", "mensaje", ...}}."""
-    raise HTTPException(status_code=status, detail={"codigo": codigo, "mensaje": mensaje, **extra})
-
-
-def _best_match(embedding: list[float]):
-    return cv_engine.find_match(embedding, _plantillas_actuales(), threshold=_threshold())
-
-
-def _purgar_pendientes() -> None:
-    limite = time.time() - PENDIENTES_TTL_S
-    for pid in [p for p, d in _pendientes.items() if d["t"] < limite]:
-        del _pendientes[pid]
-    while len(_pendientes) > MAX_PENDIENTES:
-        del _pendientes[min(_pendientes)]
-
-
-def _primeros_nombres() -> list[str]:
-    return sorted({j["nombre"].split()[0] for j in _jugadores_cache.values() if j["nombre"].split()})
 
 
 async def _respaldo_diario():
-    """Un respaldo automático al día (al arrancar y luego revisando cada hora)."""
+    """Un respaldo automático al día por sede y purga de retenciones (al arrancar y luego cada hora)."""
     while True:
-        try:
-            if not db_manager.respaldo_de_hoy_existe():
-                await run_in_threadpool(db_manager.crear_respaldo, "auto")
-        except Exception as exc:  # un fallo de respaldo no debe tumbar la API
-            print(f"[respaldo] error: {exc}")
+        for info in sedes.listar():
+            try:
+                base = db_manager.Base(sedes.ruta_db(info["slug"]))
+                if base.db_path.exists():
+                    # Retenciones (solicitudes 30 días, pendientes 7 días) aunque nadie abra la app.
+                    await run_in_threadpool(base.purgar_solicitudes)
+                    await run_in_threadpool(base.purgar_pendientes)
+                    if not base.respaldo_de_hoy_existe():
+                        await run_in_threadpool(base.crear_respaldo, "auto")
+            except Exception as exc:  # un fallo de respaldo no debe tumbar la API
+                print(f"[respaldo:{info['slug']}] error: {exc}")
         await asyncio.sleep(INTERVALO_RESPALDO_S)
+
+
+def _arrancar_sedes() -> list[Sede]:
+    aviso = sedes.migrar_legado(auth.STAFF_PIN)
+    if aviso:
+        print(f"[sedes] {aviso}")
+    if not sedes.existe(sedes.DEFAULT_SEDE):
+        print(f"[sedes] AVISO: DEFAULT_SEDE='{sedes.DEFAULT_SEDE}' no existe; los endpoints públicos sin X-Sede darán 404.")
+    cargadas = []
+    for info in sedes.listar():
+        try:
+            cargadas.append(_obtener_sede(info["slug"]))
+        except Exception:
+            log.exception("No se pudo cargar la sede %s", info["slug"])
+    return cargadas
+
+
+def _warmup(cargadas: list[Sede]) -> None:
+    vistos = set()
+    for s in cargadas or [None]:
+        cfg = s.config if s else cv_engine.config
+        clave = (cfg["modelo"], cfg["detector"], bool(cfg.get("antispoofing")))
+        if clave not in vistos:
+            vistos.add(clave)
+            cv_engine.warmup(cfg)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if auth.PIN_POR_DEFECTO:
-        print("[auth] AVISO: STAFF_PIN no está definido; se usa el PIN por defecto 1234. Cámbialo en config.local.bat.")
-    db_manager.init_db()
-    _reload_cache()
-    await run_in_threadpool(cv_engine.warmup)
+        print("[auth] AVISO: STAFF_PIN no está definido; una sede nueva creada al arrancar usaría el PIN 1234.")
+    cargadas = await run_in_threadpool(_arrancar_sedes)
+    await run_in_threadpool(_warmup, cargadas)
+    nucleo.loop = asyncio.get_running_loop()
     tarea = asyncio.create_task(_respaldo_diario())
-    voces = asyncio.create_task(precalentar_voz(_primeros_nombres()))
+    nombres = sorted({n for s in cargadas for n in s.primeros_nombres()})
+    voces = asyncio.create_task(precalentar_voz(nombres))  # caché de audio compartida: solo nombres de pila
     yield
     tarea.cancel()
     voces.cancel()
 
-
-STAFF = [Depends(auth.requerir_staff)]
 
 # La documentación interactiva (/docs, /redoc, /openapi.json) queda apagada: no hay motivo para publicar el mapa de la API.
 # Para desarrollo local: ENABLE_DOCS=1.
@@ -148,6 +109,8 @@ app = FastAPI(
     openapi_url="/openapi.json" if _DOCS else None,
 )
 app.include_router(voz_router)
+app.include_router(inscripcion_router)
+app.include_router(revision_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -158,61 +121,27 @@ app.add_middleware(
 )
 
 
-async def _analyze(file: UploadFile, miniatura: bool = False, n_foto: int | None = None,
-                   antispoofing: bool = False, rapido: bool = False, publico: bool = False) -> dict:
-    await file.seek(0)
-    cual = f" en la foto {n_foto}" if n_foto else ""
-    extra = {"foto": n_foto} if n_foto else {}
-    max_bytes = MAX_BYTES_IMAGEN if publico else MAX_BYTES_IMAGEN_STAFF
-    max_lado = MAX_LADO_IMAGEN if publico else MAX_LADO_IMAGEN_STAFF
-    # Lectura con tope (un byte de más basta para detectar el exceso sin cargar el archivo entero).
-    image_bytes = await file.read(max_bytes + 1)
-    if not image_bytes:
-        _error(400, "imagen_vacia", f"La imagen está vacía{cual}.", **extra)
-    if len(image_bytes) > max_bytes:
-        _error(413, "imagen_pesada", f"La imagen{cual} pesa más de {max_bytes // (1024 * 1024)} MB. Usa una foto más liviana.", **extra)
-    try:
-        # Solo se lee la cabecera: rechazar una imagen enorme no cuesta decodificarla.
-        with Image.open(io.BytesIO(image_bytes)) as im:
-            ancho, alto = im.size
-    except Exception:
-        _error(400, "imagen_invalida", f"No se pudo leer la imagen{cual}.", **extra)
-    if max(ancho, alto) > max_lado:
-        _error(422, "imagen_grande", f"La imagen{cual} supera {max_lado} px de lado. Usa una foto más pequeña.", **extra)
-    try:
-        # DeepFace es bloqueante (CPU); se ejecuta fuera del event loop.
-        return await run_in_threadpool(cv_engine.analyze_face, image_bytes, miniatura, antispoofing, rapido)
-    except cv_engine.SpoofError:
-        _error(422, "foto_falsa", "La cara parece una foto o una pantalla, no una persona.")
-    except cv_engine.FaceNotFoundError:
-        _error(422, "sin_rostro", f"No se detectó ningún rostro{cual}.", **extra)
-    except ValueError as exc:
-        _error(400, "imagen_invalida", f"{str(exc).rstrip('.')}{cual}.", **extra)
-    except RuntimeError:
-        # El detalle va al log; al cliente solo un mensaje genérico.
-        log.exception("Error del motor de reconocimiento")
-        _error(500, "error_motor", "Error interno del reconocimiento facial. Inténtalo de nuevo.")
-
-
 @app.get("/health")
 def health():
     """Público (túneles, monitores): solo dice que la API vive, sin datos del sistema."""
     return {"status": "ok"}
 
 
-@app.get("/health/detalle", dependencies=STAFF)
-def health_detalle():
-    compatibles = len(_plantillas_actuales())
-    _purgar_pendientes()
+@app.get("/health/detalle")
+def health_detalle(s: Sede = Depends(sede_staff)):
+    compatibles = len(s.plantillas_actuales())
+    s.db.purgar_pendientes()
     return {
         "status": "ok",
+        "sede": s.slug,
         "jugadores": compatibles,
-        "requieren_reinscripcion": len(_jugadores_cache) - compatibles,
-        "pendientes": len(_pendientes),
-        "threshold": _threshold(),
-        "modelo": cv_engine.config["modelo"],
-        "detector": cv_engine.config["detector"],
-        "antispoofing": cv_engine.config.get("antispoofing", False),
+        "requieren_reinscripcion": len(s.jugadores) - compatibles,
+        "pendientes": s.db.contar_pendientes(),
+        "solicitudes": s.db.contar_solicitudes(),
+        "threshold": s.umbral(),
+        "modelo": s.config["modelo"],
+        "detector": s.config["detector"],
+        "antispoofing": s.config.get("antispoofing", False),
     }
 
 
@@ -224,36 +153,90 @@ class ConfigIn(BaseModel):
 
 
 @app.post("/auth/login")
-def login(request: Request, pin: str = Form(...)):
-    token = auth.verificar_pin(pin, request)
-    return {"token": token, "expira_en": auth.TOKEN_TTL_S}
+def login(request: Request, pin: str = Form(...), sede: str = Form("")):
+    """PIN de la sede indicada (form-data `sede`, opcional; por defecto DEFAULT_SEDE). El token lleva la sede."""
+    slug = sede.strip() or sedes.DEFAULT_SEDE
+    token = auth.verificar_pin(pin, request, slug)
+    info = sedes.obtener(slug)
+    return {"token": token, "expira_en": auth.TOKEN_TTL_S, "sede": {"slug": info["slug"], "nombre": info["nombre"]}}
+
+
+@app.get("/sedes/{slug}")
+def sede_publica_info(slug: str):
+    """Público y mínimo: nombre de la sede y sus categorías activas (sin datos de jugadores)."""
+    try:
+        s = _obtener_sede(slug)
+    except sedes.SedeNoExiste:
+        _error(404, "sede_no_existe", "La sede no existe.")
+    return {"slug": s.slug, "nombre": s.nombre,
+            "categorias": [c["nombre"] for c in s.db.listar_categorias(incluir_inactivas=False)]}
 
 
 @app.get("/kiosko/resumen")
-def kiosko_resumen():
+def kiosko_resumen(s: Sede = Depends(sede_publica)):
     """Dato público mínimo para la pantalla del kiosko (sin nombres de niños)."""
-    return {"llegadas_hoy": len(db_manager.get_asistencias(1000, solo_hoy=True))}
+    return {"llegadas_hoy": s.db.llegadas_hoy()}
 
 
+@app.get("/config")
+def get_config(s: Sede = Depends(sede_staff)):
+    return {**s.config, "modelos": cv_engine.MODELOS, "detectores": cv_engine.DETECTORES}
 
-@app.get("/config", dependencies=STAFF)
-def get_config():
-    return {**cv_engine.config, "modelos": cv_engine.MODELOS, "detectores": cv_engine.DETECTORES}
 
-
-@app.put("/config", dependencies=STAFF)
-async def put_config(cfg: ConfigIn):
+@app.put("/config")
+async def put_config(cfg: ConfigIn, s: Sede = Depends(sede_staff)):
     try:
         nuevo = await run_in_threadpool(cv_engine.set_config, cfg.modelo, cfg.detector, cfg.umbral,
-                                        cfg.antispoofing)
+                                        cfg.antispoofing, s.config, s.ruta_config)
     except ValueError as exc:
         _error(400, "config_invalida", str(exc))
-    # Los pendientes se calcularon con el modelo anterior: ya no sirven.
-    _pendientes.clear()
-    return {**nuevo, "requieren_reinscripcion": len(_jugadores_cache) - len(_plantillas_actuales())}
+    # Los pendientes persisten: al asignarlos, una foto de otro modelo solo registra la asistencia (no se aprende).
+    return {**nuevo, "requieren_reinscripcion": len(s.jugadores) - len(s.plantillas_actuales())}
 
 
-@app.post("/enroll", dependencies=STAFF)
+# ---------------------------------------------------------------- categorías (staff, por sede)
+
+def _categoria_o_error(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except db_manager.CategoriaInvalida as exc:
+        _error(400, "categoria_invalida", str(exc))
+
+
+@app.get("/categorias")
+def listar_categorias(s: Sede = Depends(sede_staff)):
+    return s.db.listar_categorias()
+
+
+@app.post("/categorias")
+def crear_categoria(nombre: str = Form(...), orden: int | None = Form(None), s: Sede = Depends(sede_staff)):
+    return _categoria_o_error(s.db.crear_categoria, nombre, orden)
+
+
+@app.patch("/categorias/{categoria_id}")
+def editar_categoria(categoria_id: int, nombre: str | None = Form(None), orden: int | None = Form(None),
+                     activa: bool | None = Form(None), s: Sede = Depends(sede_staff)):
+    """Renombra (los jugadores de esa categoría quedan con el nombre nuevo), reordena o (des)activa."""
+    cat = _categoria_o_error(s.db.actualizar_categoria, categoria_id, nombre, orden, activa)
+    if cat is None:
+        _error(404, "no_existe", "La categoría no existe.")
+    if nombre is not None:
+        s.recargar()
+    return cat
+
+
+@app.delete("/categorias/{categoria_id}")
+def desactivar_categoria(categoria_id: int, s: Sede = Depends(sede_staff)):
+    """Desactiva (no borra: los jugadores la conservan). Reactívala con PATCH activa=true."""
+    cat = s.db.actualizar_categoria(categoria_id, activa=False)
+    if cat is None:
+        _error(404, "no_existe", "La categoría no existe.")
+    return cat
+
+
+# ---------------------------------------------------------------- inscripción y verificación
+
+@app.post("/enroll")
 async def enroll(
     nombre: str = Form(...),
     file: UploadFile | None = File(None),
@@ -262,10 +245,12 @@ async def enroll(
     forzar: bool = Form(False),
     consentimiento: bool = Form(False),
     tutor: str = Form(""),
+    s: Sede = Depends(sede_staff),
 ):
     """
     Inscribe con una foto (`file`) o varias (`files`, recomendado 3: frente y ambos perfiles).
     Requiere `consentimiento=true` y el nombre del `tutor` que firmó la autorización.
+    `categoria`: nombre de una categoría de la sede; si no existe se crea, si está desactivada -> 400.
     """
     nombre, tutor = nombre.strip(), tutor.strip()
     if not nombre:
@@ -273,6 +258,8 @@ async def enroll(
     if REQUIERE_CONSENTIMIENTO and not (consentimiento and tutor):
         _error(400, "sin_consentimiento",
                "Falta la autorización firmada del padre, madre o tutor (y su nombre).")
+    if categoria.strip():
+        _categoria_o_error(db_manager.normalizar_categoria, categoria)  # falla rápido, antes de la inferencia
     subidas = ([file] if file else []) + list(files or [])
     if not subidas:
         _error(400, "sin_foto", "Se necesita al menos una foto.")
@@ -280,12 +267,12 @@ async def enroll(
         _error(400, "demasiadas_fotos", f"Máximo {MAX_FOTOS_INSCRIPCION} fotos por inscripción.")
 
     multiples = len(subidas) > 1
-    caras = [await _analyze(f, n_foto=i + 1 if multiples else None) for i, f in enumerate(subidas)]
+    caras = [await _analyze(s, f, n_foto=i + 1 if multiples else None) for i, f in enumerate(subidas)]
     embeddings = [c["embedding"] for c in caras]
 
     # Las fotos deben ser de la misma persona: se marca la que menos se parece al resto.
     if multiples:
-        limite = _threshold() - TOLERANCIA_INSCRIPCION
+        limite = s.umbral() - TOLERANCIA_INSCRIPCION
         for i, e in enumerate(embeddings):
             otras = [cv_engine.cosine_similarity(e, o) for j, o in enumerate(embeddings) if j != i]
             if max(otras) < limite:
@@ -293,16 +280,16 @@ async def enroll(
                        f"La foto {i + 1} no parece de la misma persona que las demás. Repítela.",
                        foto=i + 1, similitud=round(max(otras), 4))
 
-    # Evita inscribir dos veces al mismo niño (salvo que el staff lo confirme).
-    if not forzar and _plantillas_actuales():
-        mejores = [_best_match(e) for e in embeddings]
+    # Evita inscribir dos veces al mismo niño en esta sede (salvo que el staff lo confirme).
+    if not forzar and s.plantillas_actuales():
+        mejores = [s.best_match(e) for e in embeddings]
         match_id, score = max(mejores, key=lambda m: m[1])
         if match_id is not None:
             _error(
                 409,
                 "posible_duplicado",
-                f"Este rostro se parece a {_jugadores_cache[match_id]['nombre']}, que ya está inscrito.",
-                nombre_existente=_jugadores_cache[match_id]["nombre"],
+                f"Este rostro se parece a {s.jugadores[match_id]['nombre']}, que ya está inscrito.",
+                nombre_existente=s.jugadores[match_id]["nombre"],
                 similitud=round(score, 4),
             )
 
@@ -314,15 +301,15 @@ async def enroll(
         if c["tamano_rostro"] < MIN_FACE_SIZE:
             avisos.append(f"{cual} la cara sale pequeña; para mejores resultados acércate más.")
 
-    categoria = categoria.strip() or None
-    modelo = cv_engine.config["modelo"]
-    jugador_id = db_manager.insert_jugador(nombre, embeddings[0], categoria, modelo,
-                                           fotos_extra=embeddings[1:],
-                                           consentimiento_tutor=tutor if consentimiento and tutor else None)
-    _jugadores_cache[jugador_id] = {"nombre": nombre, "categoria": categoria,
-                                    "plantillas": [(modelo, e) for e in embeddings]}
-    if nombre.split():
-        asyncio.create_task(precalentar_voz([nombre.split()[0]]))  # voz lista antes de que llegue a la cancha
+    categoria = _categoria_o_error(s.db.resolver_categoria, categoria)
+    modelo = s.config["modelo"]
+    jugador_id = s.db.insert_jugador(nombre, embeddings[0], categoria, modelo,
+                                     fotos_extra=embeddings[1:],
+                                     consentimiento_tutor=tutor if consentimiento and tutor else None)
+    with s.lock:
+        s.jugadores[jugador_id] = {"nombre": nombre, "categoria": categoria, "estado": "activo",
+                                   "plantillas": [(modelo, e) for e in embeddings]}
+    precalentar_nombre(nombre)  # voz lista antes de que llegue a la cancha
     return {
         "status": "success",
         "id": jugador_id,
@@ -335,38 +322,32 @@ async def enroll(
 
 
 @app.post("/verify")
-async def verify(file: UploadFile = File(...)):
-    plantillas = _plantillas_actuales()
+async def verify(file: UploadFile = File(...), s: Sede = Depends(sede_publica)):
+    """Público. Compara SOLO contra los jugadores de la sede del header X-Sede (o ?sede=, o la por defecto)."""
+    plantillas = s.plantillas_actuales()
     if not plantillas:
         _error(404, "sin_jugadores", "No hay jugadores inscritos todavía.")
 
-    antispoofing = cv_engine.config.get("antispoofing", False)
+    umbral = s.umbral()
+    antispoofing = s.config.get("antispoofing", False)
     # Camino rápido: solo se acepta si el parecido es claramente alto; si no, se confirma con el de referencia.
-    face = await _analyze(file, miniatura=True, antispoofing=antispoofing, rapido=True, publico=True)
-    jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=_threshold())
-    if cv_engine.config["detector"] == "retinaface" and not antispoofing and (
-            jugador_id is None or score < _threshold() + MARGEN_VERIFICACION_RAPIDA):
-        face = await _analyze(file, miniatura=True, antispoofing=antispoofing, publico=True)
-        jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=_threshold())
+    face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, rapido=True, publico=True)
+    jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=umbral)
+    if s.config["detector"] == "retinaface" and not antispoofing and (
+            jugador_id is None or score < umbral + MARGEN_VERIFICACION_RAPIDA):
+        face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, publico=True)
+        jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=umbral)
 
-    if jugador_id is None:
-        # Queda para que el staff indique quién era (y esa foto mejore el reconocimiento).
-        _purgar_pendientes()
-        sugerido, sim = cv_engine.best_candidate(face["embedding"], plantillas)
-        if sim < _threshold() - MARGEN_CORRECCION:
-            sugerido = None  # demasiado distinto: mejor no sugerir a nadie
-        pid = next(_pendiente_ids)
-        _pendientes[pid] = {
-            "t": time.time(), "timestamp": datetime.now().isoformat(sep=" ", timespec="seconds"),
-            "embedding": face["embedding"], "modelo": cv_engine.config["modelo"],
-            "miniatura": face["miniatura"], "sugerido_id": sugerido, "similitud": sim,
-        }
+    jugador = s.jugadores.get(jugador_id) if jugador_id is not None else None
+    if jugador is None:
+        # Queda (persistente, 7 días) para que el staff de esta sede indique quién era.
+        await run_in_threadpool(s.nuevo_pendiente, face["embedding"], face.get("miniatura") or b"")
         _error(404, "no_reconocido", "Jugador no reconocido.")
 
-    jugador = _jugadores_cache[jugador_id]
-    registrado_a_las = db_manager.asistio_hoy(jugador_id)
-    if registrado_a_las is None:
-        db_manager.registrar_asistencia(jugador_id)
+    registrado_a_las = s.db.asistio_hoy(jugador_id)
+    asistencia_id = s.db.registrar_asistencia(jugador_id) if registrado_a_las is None else None
+    # Id de un solo uso (2 min) para "No soy yo": solo disputa la asistencia que creó ESTE verify.
+    reporte = s.crear_reporte(face, jugador_id, asistencia_id)
 
     # Endpoint público (sin auth): solo lo que muestra el kiosko. Nombre de pila, sin id ni similitud.
     return {
@@ -375,106 +356,64 @@ async def verify(file: UploadFile = File(...)):
         "categoria": jugador["categoria"],
         "ya_registrado": registrado_a_las is not None,
         "registrado_a_las": registrado_a_las,
+        "reporte": reporte,
     }
 
 
-@app.get("/pendientes", dependencies=STAFF)
-def pendientes():
-    """Llegadas no reconocidas, de la más reciente a la más antigua, con miniatura y sugerencia."""
-    _purgar_pendientes()
-    salida = []
-    for pid, d in sorted(_pendientes.items(), reverse=True):
-        sug = _jugadores_cache.get(d["sugerido_id"])
-        salida.append({
-            "id": pid,
-            "timestamp": d["timestamp"],
-            "miniatura": base64.b64encode(d["miniatura"]).decode(),
-            "sugerido": ({"id": d["sugerido_id"], "nombre": sug["nombre"], "similitud": round(d["similitud"], 4)}
-                         if sug else None),
-        })
-    return salida
-
-
-@app.post("/pendientes/{pendiente_id}/asignar", dependencies=STAFF)
-def asignar_pendiente(pendiente_id: int, jugador_id: int = Form(...)):
-    """El staff indica quién era: se registra su asistencia y la foto se suma a sus plantillas."""
-    d = _pendientes.pop(pendiente_id, None)
-    if d is None:
-        _error(404, "no_existe", "Esta llegada ya fue revisada o expiró.")
-    if jugador_id not in _jugadores_cache:
-        _pendientes[pendiente_id] = d
-        _error(404, "no_existe", "El jugador no existe.")
-    foto_guardada, motivo = False, None
-    if d["modelo"] != cv_engine.config["modelo"]:
-        motivo = "La foto se tomó con otro modelo."
-    else:
-        propias = _plantillas_actuales().get(jugador_id, [])
-        parecido = max((cv_engine.cosine_similarity(d["embedding"], e) for e in propias), default=None)
-        if parecido is None or parecido >= _threshold() - MARGEN_CORRECCION:
-            _agregar_plantilla(jugador_id, d["embedding"], "correccion")
-            foto_guardada = True
-        else:
-            motivo = ("La foto se parece poco a las que ya tiene (¿mala luz, o era otro niño?), "
-                      "así que no se usó para aprender.")
-    ya = db_manager.asistio_hoy(jugador_id) is not None
-    if not ya:
-        db_manager.registrar_asistencia(jugador_id, origen="correccion", timestamp=d["timestamp"])
-    return {"status": "success", "nombre": _jugadores_cache[jugador_id]["nombre"], "ya_registrado": ya,
-            "foto_guardada": foto_guardada, "motivo": motivo}
-
-
-@app.delete("/pendientes/{pendiente_id}", dependencies=STAFF)
-def descartar_pendiente(pendiente_id: int):
-    if _pendientes.pop(pendiente_id, None) is None:
-        _error(404, "no_existe", "Esta llegada ya fue revisada o expiró.")
-    return {"status": "success"}
-
-
-@app.post("/asistencia/manual", dependencies=STAFF)
-def asistencia_manual(jugador_id: int = Form(...)):
+@app.post("/asistencia/manual")
+def asistencia_manual(jugador_id: int = Form(...), s: Sede = Depends(sede_staff)):
     """Respaldo para cuando el reconocimiento falla: el staff marca al niño a mano."""
-    if jugador_id not in _jugadores_cache:
+    if jugador_id not in s.jugadores:
         _error(404, "no_existe", "El jugador no existe.")
-    registrado_a_las = db_manager.asistio_hoy(jugador_id)
+    registrado_a_las = s.db.asistio_hoy(jugador_id)
     if registrado_a_las is None:
-        db_manager.registrar_asistencia(jugador_id, origen="manual")
-    return {"status": "success", "nombre": _jugadores_cache[jugador_id]["nombre"],
+        s.db.registrar_asistencia(jugador_id, origen="manual")
+    return {"status": "success", "nombre": s.jugadores[jugador_id]["nombre"],
             "ya_registrado": registrado_a_las is not None}
 
 
-@app.get("/jugadores", dependencies=STAFF)
-def jugadores():
-    return [{**j, "compatible": j["fotos"] > 0}
-            for j in db_manager.list_jugadores(cv_engine.config["modelo"])]
+@app.get("/jugadores")
+def jugadores(s: Sede = Depends(sede_staff)):
+    """Incluye `estado` ('activo' | 'invitado') y `tiene_consentimiento`."""
+    return [{**j, "compatible": j["fotos"] > 0} for j in s.db.list_jugadores(s.config["modelo"])]
 
 
-@app.post("/jugadores/{jugador_id}/foto", dependencies=STAFF)
-async def agregar_foto(jugador_id: int, file: UploadFile = File(...)):
+@app.post("/jugadores/{jugador_id}/foto")
+async def agregar_foto(jugador_id: int, file: UploadFile = File(...), s: Sede = Depends(sede_staff)):
     """Agrega una foto nueva a un jugador (si no lo reconoce, o tras cambiar de modelo). Conserva el historial."""
-    if jugador_id not in _jugadores_cache:
+    if jugador_id not in s.jugadores:
         _error(404, "no_existe", "El jugador no existe.")
-    face = await _analyze(file)
-    _agregar_plantilla(jugador_id, face["embedding"], "nueva_foto")
-    return {"status": "success", "nombre": _jugadores_cache[jugador_id]["nombre"]}
+    if not s.es_activo(jugador_id):
+        _error(409, "es_invitado", "Es un invitado sin autorización de imagen: apruébalo con una solicitud "
+                                   "de inscripción de su familia.")
+    face = await _analyze(s, file)
+    await run_in_threadpool(s.agregar_plantilla, jugador_id, face["embedding"], "nueva_foto")
+    return {"status": "success", "nombre": s.jugadores[jugador_id]["nombre"]}
 
 
-@app.post("/jugadores/{jugador_id}/consentimiento", dependencies=STAFF)
-def registrar_consentimiento(jugador_id: int, tutor: str = Form(...)):
+@app.post("/jugadores/{jugador_id}/consentimiento")
+def registrar_consentimiento(jugador_id: int, tutor: str = Form(...), s: Sede = Depends(sede_staff)):
     """Registra la autorización firmada para un jugador inscrito sin ella."""
     tutor = tutor.strip()
     if not tutor:
         _error(400, "sin_tutor", "Indica el nombre del padre, madre o tutor que firmó.")
-    if not db_manager.set_consentimiento(jugador_id, tutor):
+    if not s.db.set_consentimiento(jugador_id, tutor):
         _error(404, "no_existe", "El jugador no existe.")
     return {"status": "success"}
 
 
-@app.delete("/jugadores/{jugador_id}", dependencies=STAFF)
-def borrar_jugador(jugador_id: int):
-    if not db_manager.delete_jugador(jugador_id):
+@app.delete("/jugadores/{jugador_id}")
+def borrar_jugador(jugador_id: int, s: Sede = Depends(sede_staff)):
+    """Borra al jugador de la sede y también de los respaldos de la sede (fila, embeddings y asistencias)."""
+    if not s.db.delete_jugador(jugador_id):
         _error(404, "no_existe", "El jugador no existe.")
-    _jugadores_cache.pop(jugador_id, None)
-    return {"status": "success"}
+    with s.lock:
+        s.jugadores.pop(jugador_id, None)
+    s.db.auditar("borrar_jugador", f"jugador #{jugador_id}")
+    purga = s.db.purgar_de_respaldos(jugador_id)
+    if purga["errores"]:
+        log.warning("[%s] no se pudo purgar al jugador %s de: %s", s.slug, jugador_id, purga["errores"])
+    return {"status": "success", "respaldos_purgados": purga["purgados"], "respaldos_con_error": purga["errores"]}
 
 
 def _fecha(valor: str, campo: str) -> str:
@@ -484,23 +423,23 @@ def _fecha(valor: str, campo: str) -> str:
         _error(400, "fecha_invalida", f"{campo} debe tener formato AAAA-MM-DD.")
 
 
-@app.get("/jornadas", dependencies=STAFF)
-def jornadas(desde: str, hasta: str):
+@app.get("/jornadas")
+def jornadas(desde: str, hasta: str, s: Sede = Depends(sede_staff)):
     """Tipo de jornada de cada día marcado en el rango (los demás son entrenamiento)."""
-    return db_manager.get_tipos_jornada(_fecha(desde, "desde"), _fecha(hasta, "hasta"))
+    return s.db.get_tipos_jornada(_fecha(desde, "desde"), _fecha(hasta, "hasta"))
 
 
-@app.put("/jornadas/{fecha}", dependencies=STAFF)
-def marcar_jornada(fecha: str, tipo: str = Form(...)):
+@app.put("/jornadas/{fecha}")
+def marcar_jornada(fecha: str, tipo: str = Form(...), s: Sede = Depends(sede_staff)):
     try:
-        db_manager.set_tipo_jornada(_fecha(fecha, "fecha"), tipo)
+        s.db.set_tipo_jornada(_fecha(fecha, "fecha"), tipo)
     except ValueError as exc:
         _error(400, "tipo_invalido", str(exc))
     return {"status": "success", "fecha": fecha, "tipo": tipo}
 
 
-@app.get("/reportes", dependencies=STAFF)
-def reporte(desde: str | None = None, hasta: str | None = None, tipo: str = "todos"):
+@app.get("/reportes")
+def reporte(desde: str | None = None, hasta: str | None = None, tipo: str = "todos", s: Sede = Depends(sede_staff)):
     """Asistencia por jugador en el período (por defecto, los últimos 30 días)."""
     hasta = _fecha(hasta, "hasta") if hasta else date.today().isoformat()
     desde = _fecha(desde, "desde") if desde else (date.fromisoformat(hasta) - timedelta(days=29)).isoformat()
@@ -509,39 +448,44 @@ def reporte(desde: str | None = None, hasta: str | None = None, tipo: str = "tod
     if tipo not in ("todos", *db_manager.TIPOS_JORNADA):
         _error(400, "tipo_invalido", "tipo debe ser todos, entrenamiento o partido.")
     datos = reportes.calcular_reporte(
-        db_manager.list_jugadores(cv_engine.config["modelo"]),
-        db_manager.asistencias_por_dia(desde, hasta),
-        db_manager.get_tipos_jornada(desde, hasta),
+        s.db.list_jugadores(s.config["modelo"]),
+        s.db.asistencias_por_dia(desde, hasta),
+        s.db.get_tipos_jornada(desde, hasta),
         tipo,
     )
     return {"desde": desde, "hasta": hasta, "tipo": tipo, **datos}
 
 
-@app.get("/asistencias", dependencies=STAFF)
-def asistencias(limit: int = 50, hoy: bool = False, fecha: str | None = None):
-    return db_manager.get_asistencias(limit, solo_hoy=hoy, fecha=fecha)
+@app.get("/asistencias")
+def asistencias(limit: int = 50, hoy: bool = False, fecha: str | None = None, todas: bool = False,
+                s: Sede = Depends(sede_staff)):
+    """Cada fila: id, jugador_id, nombre, categoria, jugador_estado, timestamp, origen, estado, motivo.
+    Incluye las 'disputadas' (marcadas); las 'anuladas' solo con todas=true."""
+    if fecha:
+        fecha = _fecha(fecha, "fecha")
+    return s.db.get_asistencias(max(1, min(limit, 1000)), solo_hoy=hoy, fecha=fecha, incluir_anuladas=todas)
 
 
-# ---------------------------------------------------------------- respaldos
+# ---------------------------------------------------------------- respaldos (de la sede del token)
 
 _NOMBRE_RESPALDO = re.compile(r"^asistencia_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6,9}_[a-z]+\.db$")
 
 
-@app.get("/respaldos", dependencies=STAFF)
-def respaldos():
-    return db_manager.listar_respaldos()
+@app.get("/respaldos")
+def respaldos(s: Sede = Depends(sede_staff)):
+    return s.db.listar_respaldos()
 
 
-@app.post("/respaldos", dependencies=STAFF)
-async def crear_respaldo():
-    ruta = await run_in_threadpool(db_manager.crear_respaldo, "manual")
+@app.post("/respaldos")
+async def crear_respaldo(s: Sede = Depends(sede_staff)):
+    ruta = await run_in_threadpool(s.db.crear_respaldo, "manual")
     return {"status": "success", "nombre": ruta.name}
 
 
-@app.get("/respaldos/{nombre}", dependencies=STAFF)
-def descargar_respaldo(nombre: str):
-    # Solo nombres generados por el sistema: evita leer archivos fuera de la carpeta de respaldos.
-    ruta = db_manager.RESPALDOS_DIR / nombre
+@app.get("/respaldos/{nombre}")
+def descargar_respaldo(nombre: str, s: Sede = Depends(sede_staff)):
+    # Solo nombres generados por el sistema: evita leer archivos fuera de la carpeta de respaldos de la sede.
+    ruta = s.db.respaldos_dir / nombre
     if not _NOMBRE_RESPALDO.match(nombre) or not ruta.is_file():
         _error(404, "no_existe", "El respaldo no existe.")
     return FileResponse(ruta, filename=nombre, media_type="application/octet-stream")

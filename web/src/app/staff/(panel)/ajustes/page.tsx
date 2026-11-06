@@ -2,6 +2,8 @@
 
 import { Download, FlaskConical, Save, ShieldCheck } from "lucide-react";
 import { useState } from "react";
+import { Actividad } from "@/components/staff/Actividad";
+import { Categorias } from "@/components/staff/Categorias";
 import { Alerta, Badge, Button, Campo, Dialogo, ErrorCarga, PageHeader, SkeletonRows, Vacio, useQuery, useToast } from "@/components/staff/ui";
 import { ApiError, api, descargarRespaldo, type Config } from "@/lib/staff-api";
 
@@ -12,12 +14,14 @@ export default function Ajustes() {
 
   if (cfg.error && !cfg.data) return <ErrorCarga error={cfg.error} reintentar={cfg.reload} />;
 
-  const con = (jug.data ?? []).filter((j) => j.consentimiento_tutor).length;
+  const con = (jug.data ?? []).filter((j) => j.estado !== "invitado" && j.tiene_consentimiento).length;
   return (
     <>
       <PageHeader titulo="Ajustes" descripcion="Configuración del reconocimiento, respaldos y privacidad." />
       {cfg.data ? <Reconocimiento key={JSON.stringify(cfg.data)} cfg={cfg.data} total={jug.data?.length ?? 0} onGuardado={cfg.reload} /> : <div className="s-card"><SkeletonRows n={5} /></div>}
+      <Categorias />
       <Respaldos query={resp} />
+      <Actividad />
 
       <section className="s-card" aria-labelledby="priv">
         <div className="s-card-h">
@@ -39,8 +43,8 @@ export default function Ajustes() {
             </div>
           )}
           <ul className="muted" style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 }}>
-            <li>No se guardan fotos, solo la «huella» numérica de cada cara (no se puede reconstruir la foto).</li>
-            <li>Las miniaturas de «Por revisar» viven solo en memoria y se borran a las 2 horas.</li>
+            <li>No se guarda la foto: solo un código numérico (vector) por foto, del que no se puede reconstruir la imagen.</li>
+            <li>Mientras una solicitud está por revisar se guarda una miniatura del rostro; se borra al aprobar o rechazar (o a los 30 días).</li>
             <li>Para inscribir se exige el nombre del tutor y confirmar la autorización firmada.</li>
             <li>Si una familia retira su autorización, elimina al jugador: se borran sus huellas y su historial.</li>
           </ul>

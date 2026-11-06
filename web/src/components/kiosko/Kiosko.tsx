@@ -7,12 +7,13 @@
 // al quedarse quieto, la foto se saca sola. En escritorio / horizontal la cámara vive en un escenario vertical (~3:4).
 
 import { AnimatePresence, motion, MotionConfig, useMotionValue, type MotionValue } from "motion/react";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, SwitchCamera } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { abrirCamara, contarCamaras, facingInicial, guardarFacing, type Facing } from "@/lib/camara";
 import { iniciarSonidos, sonar } from "@/lib/sonidos";
 import { desbloquearVoz, hablar, type Frase } from "@/lib/voz";
-import { llegadasDeHoy, precalentar, verificar, type Verificacion } from "@/lib/api";
+import { llegadasDeHoy, noSoyYo, precalentar, verificar, type Verificacion } from "@/lib/api";
 import { calidadActual, iniciarCalidad, restriccionesCamara, useCalidad } from "./calidad";
 import Aurora, { type ModoAurora } from "./Aurora";
 import Insignia from "./Insignia";
@@ -24,6 +25,7 @@ import { k } from "./tiempo";
 import { capturarFoto, useRastreoCara, type Objetivo, type Postura } from "./useRastreoCara";
 
 const MOSTRAR_RESULTADO_MS = 4200;
+const GRACIAS_MS = 2800; // tras "¿No eres tú?", el mensaje de gracias queda visible este tiempo
 const ESPERA_MISMO_NIÑO_MS = 6000; // tras un resultado, no vuelve a escanear a quien sigue frente a la cámara
 const EASE = [0.22, 1, 0.36, 1] as const;
 const ESCRITORIO_DESDE = 900; // ancho (px) desde el que la cámara va en un escenario centrado
@@ -188,12 +190,18 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   }, [circulo]);
 
   const [errorCamara, setErrorCamara] = useState<string | null>(null);
+  const [camaraLista, setCamaraLista] = useState(false); // false mientras el permiso de cámara está pendiente
   const [intento, setIntento] = useState(0);
+  const [facing, setFacing] = useState<Facing>(facingInicial);
+  const [espejo, setEspejo] = useState(true); // la frontal se ve en espejo; la trasera no
+  const [varias, setVarias] = useState(false);
   const [faseReal, setFase] = useState<"escaneando" | "enviando" | "resultado">("escaneando");
   const [resultadoReal, setResultado] = useState<Resultado | null>(null);
   const [hoy, setHoy] = useState<number | null>(null);
   const [esperarSalida, setEsperarSalida] = useState(false);
   const [fotoUrl, setFotoUrl] = useState<string | null>(null); // foto capturada, para mostrarla nítida a pantalla completa
+  const [reporte, setReporte] = useState<string | null>(null); // token de un solo uso de /verify para "¿No eres tú?"
+  const [estadoReporte, setEstadoReporte] = useState<"libre" | "enviando" | "enviado" | "limite" | "red">("libre");
   const [repetir, setRepetir] = useState(0); // solo demo: tocar la pantalla repite la secuencia
   const voz = useRef(true);
   const prueba = useRef(false);
@@ -257,23 +265,19 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     let cancelado = false;
     (async () => {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Este navegador no tiene acceso a la cámara (en iPhone usa Safari con HTTPS).");
-      const pedir = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-      let s: MediaStream;
-      try {
-        s = await pedir(restriccionesCamara(calidadActual()));
-      } catch (e) {
-        // Una cámara que no cumple lo "ideal" no debería fallar, pero algunas la rechazan: se reintenta sin medidas.
-        if (e instanceof DOMException && (e.name === "OverconstrainedError" || e.name === "ConstraintNotSatisfiedError")) {
-          s = await pedir({ video: { facingMode: "user" }, audio: false });
-        } else throw e;
-      }
+      // `exact` → `ideal` → sin medidas → `true` (ver lib/camara): una cámara que no cumple lo "ideal" no debe fallar.
+      const r = await abrirCamara(facing, restriccionesCamara(calidadActual()).video as MediaTrackConstraints);
+      const s = r.stream;
       if (cancelado) return s.getTracks().forEach((t) => t.stop());
       stream = s;
+      setEspejo(r.facing === "user"); // antes de asignar el stream: vista y coordenadas del rastreo cambian juntas
+      contarCamaras().then((n) => !cancelado && setVarias(n > 1));
       s.getVideoTracks().forEach((t) => {
         // iOS/Android cortan la cámara al ocultar la app o si otra app la toma: se vuelve a abrir.
         t.addEventListener("ended", () => !cancelado && document.visibilityState === "visible" && setIntento((n) => n + 1));
       });
       setErrorCamara(null);
+      setCamaraLista(true);
       const v = video.current;
       if (v) {
         v.srcObject = s;
@@ -292,14 +296,29 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     const alPausar = () => document.visibilityState === "visible" && !cancelado && v0?.play().catch(() => {});
     v0?.addEventListener("pause", alPausar);
     document.addEventListener("visibilitychange", alVolver);
+    const alCambiarDispositivos = () => contarCamaras().then((n) => !cancelado && setVarias(n > 1));
+    navigator.mediaDevices?.addEventListener?.("devicechange", alCambiarDispositivos);
     return () => {
       cancelado = true;
       document.removeEventListener("visibilitychange", alVolver);
+      navigator.mediaDevices?.removeEventListener?.("devicechange", alCambiarDispositivos);
       v0?.removeEventListener("pause", alPausar);
       stream?.getTracks().forEach((t) => t.stop());
       if (v0) v0.srcObject = null;
     };
-  }, [intento]);
+  }, [intento, facing]);
+
+  // Voltear: solo reabre la cámara (no recarga el modelo ni reinicia `intento`); el anillo vuelve a cero.
+  const voltearCamara = useCallback(() => {
+    const t = Date.now();
+    if (t - ultimoReintento.current < 600) return;
+    ultimoReintento.current = t;
+    const nuevo: Facing = facing === "user" ? "environment" : "user";
+    guardarFacing(nuevo);
+    progreso.set(0);
+    setErrorCamara(null);
+    setFacing(nuevo);
+  }, [facing, progreso]);
 
   useEffect(() => {
     if (!errorCamara) return;
@@ -368,6 +387,8 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
       clearTimeout(subeContador.current);
       subeContador.current = setTimeout(() => setHoy((n) => (n === null ? n : n + 1)), 900 * k());
     }
+    setReporte(v.ok && !v.yaRegistrado ? (v.reporte ?? null) : null);
+    setEstadoReporte("libre");
     setResultado(resultado);
     setFase("resultado");
     if (frase && voz.current) hablar(frase);
@@ -384,6 +405,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     onCapturaFallida: alFallarCaptura,
     mantenerAnillo: faseReal === "enviando",
     escenario,
+    espejo,
     rastro: enDemo ? undefined : rastro,
   });
 
@@ -439,14 +461,30 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   // Fin del resultado: vuelve a escanear, pero espera a que el niño se vaya (o pasen unos segundos).
   const terminarResultado = useCallback(() => {
     setResultado(null);
+    setReporte(null);
+    setEstadoReporte("libre");
     setFase("escaneando");
     setEsperarSalida(true);
   }, []);
   useEffect(() => {
-    if (fase !== "resultado" || prueba.current) return;
-    const id = setTimeout(terminarResultado, MOSTRAR_RESULTADO_MS);
+    // Mientras se envía el aviso el resultado se queda; al terminar, el mensaje de gracias dura GRACIAS_MS y se sigue.
+    if (fase !== "resultado" || prueba.current || estadoReporte === "enviando") return;
+    const ms = estadoReporte === "enviado" || estadoReporte === "limite" ? GRACIAS_MS : MOSTRAR_RESULTADO_MS;
+    const id = setTimeout(terminarResultado, ms);
     return () => clearTimeout(id);
-  }, [fase, terminarResultado]);
+  }, [fase, terminarResultado, estadoReporte]);
+
+  // "¿No eres tú?": un toque avisa al staff con el reporte de un solo uso. Respuesta genérica; 429 = mensaje amable.
+  const avisarNoSoyYo = useCallback(async () => {
+    if (!reporte || estadoReporte === "enviando" || estadoReporte === "enviado") return;
+    setEstadoReporte("enviando");
+    const r = await noSoyYo(reporte);
+    if (r === "ok") {
+      setReporte(null); // de un solo uso
+      setEstadoReporte("enviado");
+      sonar("aviso");
+    } else setEstadoReporte(r);
+  }, [reporte, estadoReporte]);
   useEffect(() => {
     if (!esperarSalida) return;
     const id = setTimeout(() => setEsperarSalida(false), postura === "sin-cara" ? 0 : ESPERA_MISMO_NIÑO_MS);
@@ -520,6 +558,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   else if (reintentandoRed && fase === "enviando") arriba = { titulo: "Sin conexión, reintentando…", sub: "No te muevas" };
   else if (fase === "enviando") arriba = { titulo: "Casi listo", sub: "Un momento" };
   else if (modoManual) arriba = { titulo: "Toma tu foto", sub: "Pon tu cara en el marco y toca el botón" };
+  else if (!enDemo && !camaraLista) arriba = { titulo: "Permite la cámara para continuar", sub: "Acepta el aviso del navegador" };
   else if (!listo) arriba = { titulo: "Preparando la cámara", sub: cargaLenta ? "Conexión lenta, cargando…" : "Un momento" };
   else if (esperarSalida && postura !== "sin-cara") arriba = { titulo: "Listo", sub: "Puede pasar el siguiente" };
   else arriba = GUIA[postura];
@@ -575,14 +614,14 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
         <div ref={escenario} className="reco-escenario" data-escritorio={escritorio ? "" : undefined} style={{ width: sw, height: sh }}>
           {sinCamara && <Aurora modo="error" />}
 
-          {/* Cámara a sangre, en espejo (cámara frontal) */}
+          {/* Cámara a sangre; en espejo solo la frontal */}
           <video
             ref={video}
             autoPlay
             muted
             playsInline
             disablePictureInPicture
-            className="absolute inset-0 h-full w-full -scale-x-100 object-cover"
+            className={`absolute inset-0 h-full w-full object-cover ${espejo ? "-scale-x-100" : ""}`}
             style={{ opacity: sinCamara ? 0 : 1 }}
           />
           {/* Demo: recorte de una foto de FA CUP donde iría la cámara */}
@@ -610,7 +649,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
                     <div className="absolute inset-0" style={{ ...fotoDemo, filter: filtroFoto }} />
                   ) : (
                     // eslint-disable-next-line @next/next/no-img-element -- objectURL local del cuadro capturado
-                    <img src={fotoUrl} alt="" className="absolute inset-0 h-full w-full -scale-x-100 object-cover" style={{ filter: filtroFoto }} />
+                    <img src={fotoUrl} alt="" className={`absolute inset-0 h-full w-full object-cover ${espejo ? "-scale-x-100" : ""}`} style={{ filter: filtroFoto }} />
                   )}
                 </motion.div>
               </motion.div>
@@ -648,6 +687,19 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
               }}
             >
               <ChevronLeft size={22} strokeWidth={2.25} aria-hidden />
+            </button>
+          )}
+          {varias && !enDemo && !sinCamara && (
+            <button
+              type="button"
+              className="reco-volver reco-voltear"
+              aria-label="Voltear cámara (frontal o trasera)"
+              onClick={(e) => {
+                e.stopPropagation();
+                voltearCamara();
+              }}
+            >
+              <SwitchCamera size={20} strokeWidth={2} aria-hidden />
             </button>
           )}
           <header className="absolute inset-x-0 top-0 z-[4] flex flex-col items-center px-6 pt-[max(1.1rem,env(safe-area-inset-top))] text-center">
@@ -707,6 +759,23 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
               )}
             </AnimatePresence>
 
+            {exito && !sobrio && (reporte || estadoReporte === "enviado") && (
+              <div className="flex min-h-[44px] items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                {estadoReporte === "enviado" ? (
+                  <p role="status" className="reco-texto text-[0.95rem] font-medium text-white/90">
+                    Gracias, el staff lo revisará
+                  </p>
+                ) : estadoReporte === "limite" ? (
+                  <p role="status" className="reco-texto text-[0.95rem] font-medium text-white/90">
+                    Hay muchos avisos ahora. Avisa a tu entrenador.
+                  </p>
+                ) : (
+                  <button type="button" className="reco-salir !min-h-[44px] !bg-white/10 !text-[0.9rem] !font-medium" disabled={estadoReporte === "enviando"} onClick={() => void avisarNoSoyYo()}>
+                    {estadoReporte === "enviando" ? "Enviando…" : estadoReporte === "red" ? "Sin conexión, toca para reintentar" : "¿No eres tú?"}
+                  </button>
+                )}
+              </div>
+            )}
             {(sinCamara && !enDemo) && (
               <button type="button" className="reco-salir !min-h-[52px] !px-7 !bg-white/20" onClick={(e) => { e.stopPropagation(); reintentarCamara(); }}>
                 Reintentar

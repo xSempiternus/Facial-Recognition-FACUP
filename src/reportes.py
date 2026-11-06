@@ -8,7 +8,7 @@ def calcular_reporte(jugadores: list[dict], asistencias: list[tuple[int, str]], 
                      tipo: str = "todos") -> dict:
     """
     jugadores:   [{'id', 'nombre', 'categoria', 'creado_en'}, ...]
-    asistencias: pares (jugador_id, 'YYYY-MM-DD') dentro del período
+    asistencias: pares (jugador_id, 'YYYY-MM-DD') dentro del período (solo asistencias válidas)
     tipos:       {'YYYY-MM-DD': 'entrenamiento'|'partido'} (días sin marcar = entrenamiento)
     tipo:        'todos' | 'entrenamiento' | 'partido'
 
@@ -35,6 +35,7 @@ def calcular_reporte(jugadores: list[dict], asistencias: list[tuple[int, str]], 
             racha += 1
         filas.append({
             "id": j["id"], "nombre": j["nombre"], "categoria": j.get("categoria"),
+            "estado": j.get("estado", "activo"),  # 'invitado' se muestra marcado
             "presentes": len(asistidos), "posibles": len(posibles),
             "porcentaje": round(len(asistidos) / len(posibles), 4) if posibles else None,
             "ausencias_seguidas": racha,

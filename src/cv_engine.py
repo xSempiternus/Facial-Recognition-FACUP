@@ -14,7 +14,9 @@ from deepface.modules.exceptions import SpoofDetected
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 
-# Prioridad: valores por defecto < variables de entorno < data/config.json (lo que guarda la UI).
+# Cada sede tiene su propia configuración (data/sedes/<slug>/config.json); las funciones de análisis reciben
+# esa configuración como `cfg`. El módulo conserva `config` (la global) como valor por defecto.
+# Prioridad: valores por defecto < variables de entorno < config.json (lo que guarda la UI).
 # Facenet512 es un buen equilibrio precisión/velocidad en CPU.
 # Detectores: "opencv" (rápido), "yunet" (rápido y más robusto), "retinaface" (más preciso, más lento).
 # antispoofing: detecta fotos mostradas en un celular/papel (FasNet). Solo se aplica en el kiosko.
@@ -28,14 +30,15 @@ UMBRAL_POR_MODELO = {"Facenet512": 0.70, "ArcFace": 0.45, "SFace": 0.47, "GhostF
 DETECTORES = ["opencv", "yunet", "retinaface", "mtcnn", "ssd"]
 
 
-def load_config() -> dict:
+def load_config(ruta: Path | None = None) -> dict:
+    ruta = Path(ruta) if ruta else CONFIG_PATH
     cfg = dict(DEFAULTS)
     env = {"modelo": os.getenv("FACE_MODEL"), "detector": os.getenv("FACE_DETECTOR"),
            "umbral": os.getenv("MATCH_THRESHOLD")}
     cfg.update({k: v for k, v in env.items() if v})
-    if CONFIG_PATH.exists():
+    if ruta.exists():
         try:
-            cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+            cfg.update(json.loads(ruta.read_text(encoding="utf-8")))
         except (ValueError, OSError):
             pass
     if cfg["umbral"] is None:
@@ -47,8 +50,11 @@ def load_config() -> dict:
 config = load_config()
 
 
-def set_config(modelo: str, detector: str, umbral: float, antispoofing: bool | None = None) -> dict:
-    """Cambia la configuración en caliente, la persiste y precarga el modelo."""
+def set_config(modelo: str, detector: str, umbral: float, antispoofing: bool | None = None,
+               cfg: dict | None = None, ruta: Path | None = None) -> dict:
+    """Cambia la configuración `cfg` (por defecto la global) en caliente, la persiste en `ruta` y precarga el modelo."""
+    cfg = config if cfg is None else cfg
+    ruta = Path(ruta) if ruta else CONFIG_PATH
     if modelo not in MODELOS:
         raise ValueError(f"Modelo no soportado: {modelo}")
     if detector not in DETECTORES:
@@ -56,18 +62,19 @@ def set_config(modelo: str, detector: str, umbral: float, antispoofing: bool | N
     if not 0 < umbral < 1:
         raise ValueError("El umbral debe estar entre 0 y 1.")
     if antispoofing is None:
-        antispoofing = config.get("antispoofing", False)
+        antispoofing = cfg.get("antispoofing", False)
     nuevo = {"modelo": modelo, "detector": detector, "umbral": round(float(umbral), 3),
              "antispoofing": bool(antispoofing)}
     DeepFace.build_model(modelo)  # falla antes de guardar si el modelo no carga
     DeepFace.build_model(detector, task="face_detector")
     if nuevo["antispoofing"]:
         DeepFace.build_model("Fasnet", task="spoofing")
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(nuevo, indent=2), encoding="utf-8")
-    config.clear()
-    config.update(nuevo)
-    return dict(config)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ruta.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(nuevo, indent=2), encoding="utf-8")
+    tmp.replace(ruta)
+    cfg.update(nuevo)  # sin clear(): otra petición concurrente nunca ve la config vacía
+    return dict(cfg)
 
 
 class FaceNotFoundError(ValueError):
@@ -102,7 +109,7 @@ def _miniatura(img: np.ndarray, area: dict, lado: int = 160) -> bytes:
 LADO_DETECCION_RAPIDA = 640
 
 
-def _analizar_rapido(img: np.ndarray, miniatura: bool) -> dict:
+def _analizar_rapido(img: np.ndarray, miniatura: bool, cfg: dict) -> dict:
     alto, ancho = img.shape[:2]
     k = min(1.0, LADO_DETECCION_RAPIDA / max(alto, ancho))
     chica = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else img
@@ -127,7 +134,7 @@ def _analizar_rapido(img: np.ndarray, miniatura: bool) -> dict:
                                    width_border=wb, height_border=hb, detector_backend="retinaface")
     if cara.img.shape[0] == 0 or cara.img.shape[1] == 0:
         raise FaceNotFoundError("No se detectó ningún rostro en la imagen.")
-    emb = DeepFace.represent(img_path=np.ascontiguousarray(cara.img), model_name=config["modelo"],
+    emb = DeepFace.represent(img_path=np.ascontiguousarray(cara.img), model_name=cfg["modelo"],
                              detector_backend="skip", enforce_detection=False, align=False)[0]["embedding"]
     a = cara.facial_area
     resultado = {"embedding": [float(x) for x in emb], "num_rostros": len(caras),
@@ -138,7 +145,7 @@ def _analizar_rapido(img: np.ndarray, miniatura: bool) -> dict:
 
 
 def analyze_face(image_bytes: bytes, miniatura: bool = False, antispoofing: bool = False,
-                 rapido: bool = False) -> dict:
+                 rapido: bool = False, cfg: dict | None = None) -> dict:
     """
     Detecta el rostro principal (el más grande) y retorna:
     {'embedding', 'num_rostros', 'confianza', 'tamano_rostro'} (+ 'miniatura' JPEG si se pide)
@@ -147,17 +154,18 @@ def analyze_face(image_bytes: bytes, miniatura: bool = False, antispoofing: bool
     Con rapido=True (solo retinaface, sin antispoofing) usa el camino rápido; ante cualquier problema
     cae al camino de referencia. Úsalo solo para verificar: la inscripción siempre usa el de referencia.
     """
+    cfg = config if cfg is None else cfg
     img = _decode_image(image_bytes)
-    if rapido and config["detector"] == "retinaface" and not antispoofing:
+    if rapido and cfg["detector"] == "retinaface" and not antispoofing:
         try:
-            return _analizar_rapido(img, miniatura)
+            return _analizar_rapido(img, miniatura, cfg)
         except Exception:  # cualquier fallo: se repite con el camino de referencia
             pass
     try:
         faces = DeepFace.represent(
             img_path=img,
-            model_name=config["modelo"],
-            detector_backend=config["detector"],
+            model_name=cfg["modelo"],
+            detector_backend=cfg["detector"],
             enforce_detection=True,
             align=True,
             anti_spoofing=antispoofing,
@@ -235,8 +243,9 @@ def best_candidate(target_embedding, stored_embeddings_dict: dict):
     return claves[i], float(puntajes[i])
 
 
-def warmup() -> None:
+def warmup(cfg: dict | None = None) -> None:
     """Carga el modelo en memoria para que la primera petición no sea lenta."""
+    config = globals()["config"] if cfg is None else cfg
     DeepFace.build_model(config["modelo"])
     DeepFace.build_model(config["detector"], task="face_detector")
     # Una pasada en vacío traza los grafos de TensorFlow: sin esto la primera verificación tarda ~9 s.

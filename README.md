@@ -7,7 +7,9 @@ MVP local: FastAPI + DeepFace + SQLite. Kiosko de llegada en Next.js (`web/`); p
 ```
 data/                    BD SQLite (asistencia.db) y config.json; se crean solos
 src/cv_engine.py         detección facial, embeddings, similitud del coseno, configuración
-src/db_manager.py        SQLite: tablas jugadores / asistencia, CRUD y migraciones
+src/db_manager.py        SQLite de UNA sede: jugadores / fotos / asistencia / categorías, respaldos
+src/sedes.py             registro de sedes (data/control.db), PIN por sede, migración automática
+scripts/crear_sede.py    crea sedes nuevas o cambia su PIN
 api/main.py              API FastAPI
 web/                     Kiosko de llegada: Next.js + Motion + MediaPipe (ver web/README.md)
 ui/app.py                Panel del staff en Streamlit (navegación)
@@ -104,8 +106,9 @@ referencia visual en la página **Guía de estilo**.
 
 - **Autorización del tutor:** para inscribir se exige su nombre y confirmar la autorización firmada
   (`REQUIRE_CONSENT=0` lo desactiva). Los jugadores sin ella quedan marcados en Jugadores.
-- **Respaldos:** copia automática diaria de la BD en `data/respaldos/` (se guardan las últimas 14), más
-  respaldos manuales y descarga desde 🛠️ Ajustes.
+- **Respaldos:** copia automática diaria de la BD de cada sede en `data/sedes/<slug>/respaldos/` (se guardan
+  las últimas 14), más respaldos manuales y descarga desde 🛠️ Ajustes. Al borrar un jugador también se borra
+  (fila, embeddings y asistencias, con VACUUM) de todos los respaldos de su sede.
 - **Fotos falsas (experimental):** con FasNet, el kiosko rechaza caras mostradas en un celular o papel.
   Viene **desactivado**: en pruebas rechazó por error 4 de 16 fotos reales y hace la verificación ~2,5×
   más lenta. Pruébalo con la cámara real antes de activarlo.
@@ -138,8 +141,8 @@ a nadie como otra persona (+0.03 de margen).
 
 ## Configuración
 
-La UI guarda modelo, detector y umbral en `data/config.json`. Prioridad:
-valores por defecto < variables de entorno < `data/config.json`.
+La UI guarda modelo, detector y umbral en `data/sedes/<slug>/config.json` (uno por sede). Prioridad:
+valores por defecto < variables de entorno < config.json de la sede.
 
 | Variable          | Default                 | Descripción                                        |
 |-------------------|-------------------------|----------------------------------------------------|
@@ -147,21 +150,52 @@ valores por defecto < variables de entorno < `data/config.json`.
 | `FACE_MODEL`      | `Facenet512`            | Modelo DeepFace                                    |
 | `FACE_DETECTOR`   | `opencv`                | Detector de caras                                  |
 | `API_URL`         | `http://127.0.0.1:8000` | URL de la API usada por Streamlit                  |
-| `STAFF_PIN`       | `1234`                  | PIN del panel del staff (definirlo en `config.local.bat`, mín. 8 caracteres) |
+| `STAFF_PIN`       | `1234`                  | PIN **inicial** de la sede migrada/por defecto (solo al crearla; luego manda el hash en `data/control.db`, cámbialo con `crear_sede.py --cambiar-pin`) |
 | `TRUST_PROXY`     | `0`                     | `1` si la API va detrás de un proxy/túnel (usa la IP real del cliente); lo activa `iniciar-demo.bat` |
 | `AUTH_SECRET`     | aleatoria por arranque  | Clave que firma las sesiones del staff             |
 | `AUTH_TTL_HORAS`  | `12`                    | Duración de la sesión del staff                    |
 | `CORS_ORIGINS`    | `http://localhost:3000` | Orígenes web permitidos (separados por coma)       |
 | `REQUIRE_CONSENT` | `1`                     | Exigir autorización del tutor para inscribir       |
-| `DB_PATH`         | `data/asistencia.db`    | Base de datos a usar (sus respaldos van a su lado) |
+| `DATA_DIR`        | `data/`                 | Carpeta de datos (control.db, sedes/, voz/). Útil para pruebas con una copia |
+| `DEFAULT_SEDE`    | `las-condes`            | Sede usada cuando el login o un endpoint público no indican sede |
+
+## Multi-sede
+
+Una base SQLite por sede, aisladas entre sí:
+
+```
+data/control.db                    registro: slug, nombre, hash del PIN (PBKDF2), creada_en, activa
+data/sedes/<slug>/asistencia.db    jugadores, fotos, asistencia, categorías, jornadas
+data/sedes/<slug>/config.json      modelo, detector, umbral, antispoofing
+data/sedes/<slug>/respaldos/
+data/voz/                          caché de audio compartida (solo nombres de pila)
+```
+
+- **Migración automática** (idempotente, al arrancar): si existe `data/asistencia.db` y la sede `las-condes`
+  no está registrada, se crea copiando BD, config y respaldos; el original queda como
+  `data/asistencia.db.migrado` (no se borra). Su PIN inicial es `STAFF_PIN`. Instalación nueva sin datos: se
+  crea `DEFAULT_SEDE` vacía.
+- **Crear una sede** (no hace falta reiniciar la API):
+  `.venv\Scripts\python scripts\crear_sede.py providencia "Sede Providencia" --pin 12345678`
+  (`--cambiar-pin <pin>` para cambiar el PIN, `--listar` para ver las sedes).
+- **Staff:** la sede sale solo del token (claim `sede` firmado); un token nunca opera sobre otra sede.
+- **Públicos** (`/verify`, `/kiosko/resumen`): header `X-Sede: <slug>` (o `?sede=`); sin él, `DEFAULT_SEDE`.
+  Sede inexistente o inválida → 404 `sede_no_existe`.
+- **Categorías:** tabla por sede, sembrada con `Sub-10` (y las que ya usaban los jugadores al migrar).
+  En `/enroll`, una categoría que no existe se crea (compatibilidad con la lista fija del frontend); una
+  desactivada → 400 `categoria_invalida`.
 
 ## API
+
+- `POST /auth/login` — form-data `pin`, `sede?` (default `DEFAULT_SEDE`) → `{"token", "expira_en", "sede": {"slug", "nombre"}}`; 401 PIN incorrecto, 404 sede inexistente, 429 tras 5 fallos (por sede + cliente).
+- `GET /sedes/{slug}` (público) → `{"slug", "nombre", "categorias": ["Sub-10", ...]}` (solo activas).
+- `GET /categorias`, `POST /categorias` (form `nombre`, `orden?`), `PATCH /categorias/{id}` (form `nombre?`, `orden?`, `activa?`; renombrar actualiza a sus jugadores), `DELETE /categorias/{id}` (desactiva).
 
 - `POST /enroll` — form-data `nombre`, `file` o `files` (hasta 5), `categoria?`, `forzar?` → 409 si parece duplicado, 422 si las fotos no son de la misma persona.
 - `POST /verify` — form-data `file` → `{"status": "success", "nombre", "similitud", "ya_registrado", ...}`; 404 si no hay match, 422 si no hay cara.
 - `POST /asistencia/manual` — form-data `jugador_id`.
 - `GET /pendientes`, `POST /pendientes/{id}/asignar` (form-data `jugador_id`), `DELETE /pendientes/{id}`
-- `GET /jugadores`, `POST /jugadores/{id}/foto`, `DELETE /jugadores/{id}`
+- `GET /jugadores`, `POST /jugadores/{id}/foto`, `DELETE /jugadores/{id}` (→ además `respaldos_purgados`, `respaldos_con_error`)
 - `GET /asistencias?fecha=YYYY-MM-DD` (o `?hoy=true`)
 - `POST /jugadores/{id}/consentimiento` — form-data `tutor`.
 - `GET /respaldos`, `POST /respaldos`, `GET /respaldos/{nombre}` (descarga)

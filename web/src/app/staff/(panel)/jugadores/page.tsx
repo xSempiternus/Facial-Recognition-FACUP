@@ -1,13 +1,16 @@
 "use client";
 
-import { Camera as CamIcon, CircleCheck, Search, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
+import { Camera as CamIcon, CircleCheck, Pencil, QrCode, Search, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { Camara } from "@/components/staff/Camara";
+import { CamposInvitado, useCategoriasActivas } from "@/components/staff/NinoNuevo";
+import { BotonAyuda, Tour, type PasoTour } from "@/components/staff/Tour";
 import {
   Alerta,
   Avatar,
   Badge,
+  BadgeInvitado,
   Button,
   Dialogo,
   ErrorCarga,
@@ -16,15 +19,26 @@ import {
   SkeletonRows,
   Vacio,
   useQuery,
+  useRefrescoAlVolver,
   useToast,
 } from "@/components/staff/ui";
-import { ApiError, api, fechaHora, ordenarCategorias, type Jugador } from "@/lib/staff-api";
+import { ApiError, api, fechaHora, ordenarCategorias, textoError, type Jugador } from "@/lib/staff-api";
 
-type Accion = { tipo: "foto" | "autorizar" | "eliminar"; j: Jugador } | null;
+type Accion = { tipo: "foto" | "autorizar" | "eliminar" | "editar"; j: Jugador } | null;
+
+const PASOS: PasoTour[] = [
+  { selector: "[data-tour='buscar']", titulo: "Encuentra a un jugador", texto: "Busca por nombre o filtra por categoría.", lado: "abajo" },
+  { selector: "[data-tour='estado']", titulo: "Estado de cada niño", texto: "«Listo» significa que la cámara ya lo reconoce. «Invitado» vino a probarse y aún no tiene autorización de imagen; «Sin autorización» falta la firma del apoderado.", lado: "abajo" },
+  { selector: "[data-tour='acciones']", titulo: "Acciones", texto: "Marca asistencia, edita nombre o categoría, agrega una foto o registra la autorización. A un invitado puedes enviarle el QR de inscripción a su familia.", lado: "izq" },
+];
 
 export default function Jugadores() {
   const notificar = useToast();
   const { data, error, cargando, reload } = useQuery(api.jugadores);
+  useRefrescoAlVolver(reload);
+  const categoriasSede = useCategoriasActivas();
+  const [nombreEd, setNombreEd] = useState("");
+  const [catEd, setCatEd] = useState("");
   const [q, setQ] = useState("");
   const [cats, setCats] = useState<string[]>([]);
   const [accion, setAccion] = useState<Accion>(null);
@@ -39,13 +53,37 @@ export default function Jugadores() {
     [data, q, cats],
   );
 
+  function abrirEditar(j: Jugador) {
+    setNombreEd(j.nombre);
+    setCatEd(j.categoria ?? "");
+    setAccion({ tipo: "editar", j });
+  }
+
+  async function guardarEdicion() {
+    if (!accion) return;
+    setTrabajando(true);
+    try {
+      const cambios: { nombre?: string; categoria?: string | null } = {};
+      if (nombreEd.trim() !== accion.j.nombre) cambios.nombre = nombreEd.trim();
+      if (catEd !== (accion.j.categoria ?? "")) cambios.categoria = catEd || null;
+      if (Object.keys(cambios).length) await api.editarJugador(accion.j.id, cambios);
+      notificar("Jugador actualizado");
+      cerrar();
+      reload();
+    } catch (e) {
+      fallo(e);
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
   function cerrar() {
     setAccion(null);
     setTutor("");
     setConfirma(false);
     setErrorFoto(null);
   }
-  const fallo = (e: unknown) => notificar(e instanceof ApiError ? e.message : "No se pudo completar la acción.", "err");
+  const fallo = (e: unknown) => notificar(textoError(e), "err");
 
   async function marcar(j: Jugador) {
     try {
@@ -66,7 +104,7 @@ export default function Jugadores() {
       cerrar();
       reload();
     } catch (e) {
-      setErrorFoto(e instanceof ApiError ? (e.codigo === "sin_rostro" ? "No se detectó una cara. Revisa la luz y que mire de frente." : e.message) : "No se pudo guardar.");
+      setErrorFoto(e instanceof ApiError && e.codigo === "sin_rostro" ? "No se detectó una cara. Revisa la luz y que mire de frente." : textoError(e, "No se pudo guardar."));
     } finally {
       setTrabajando(false);
     }
@@ -104,16 +142,25 @@ export default function Jugadores() {
 
   if (error && !data) return <ErrorCarga error={error} reintentar={reload} />;
 
-  const sinAut = (data ?? []).filter((j) => !j.consentimiento_tutor).length;
-  const sinFoto = (data ?? []).filter((j) => !j.compatible).length;
+  const sinAut = (data ?? []).filter((j) => j.estado !== "invitado" && !j.tiene_consentimiento).length;
+  const sinFoto = (data ?? []).filter((j) => j.estado !== "invitado" && !j.compatible).length;
+  const nInvitados = (data ?? []).filter((j) => j.estado === "invitado").length;
 
   return (
     <>
       <PageHeader titulo="Jugadores" descripcion="Todos los niños inscritos en la liga.">
+        <BotonAyuda id="jugadores" />
         <Link className="s-btn primary" href="/staff/inscribir">
           <UserPlus size={15} aria-hidden /> Inscribir
         </Link>
       </PageHeader>
+      <Tour id="jugadores" pasos={PASOS} />
+
+      {nInvitados > 0 && (
+        <Alerta>
+          {nInvitados} invitado(s) vinieron a probarse y aún no tienen autorización de imagen. Envíales el enlace de inscripción desde el botón del código QR en su fila.
+        </Alerta>
+      )}
 
       {sinAut > 0 && (
         <Alerta>
@@ -128,7 +175,7 @@ export default function Jugadores() {
 
       <section className="s-card" aria-label="Lista de jugadores">
         <div className="s-card-h">
-          <div className="s-input-wrap" style={{ flex: "1 1 240px", maxWidth: 340 }}>
+          <div className="s-input-wrap" data-tour="buscar" style={{ flex: "1 1 240px", maxWidth: 340 }}>
             <Search size={15} aria-hidden />
             <input className="s-input" type="search" placeholder="Buscar por nombre" aria-label="Buscar por nombre" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
@@ -179,19 +226,34 @@ export default function Jugadores() {
                     <td className="hide-sm muted tnum">{j.ultima_asistencia ? fechaHora(j.ultima_asistencia) : "—"}</td>
                     <td className="hide-sm num">{j.fotos}</td>
                     <td>
-                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                        {j.compatible ? <Badge tono="ok">Listo</Badge> : <Badge tono="warn">Falta foto</Badge>}
-                        {!j.consentimiento_tutor && <Badge tono="warn">Sin autorización</Badge>}
+                      <div data-tour={j.id === filtrados[0]?.id ? "estado" : undefined} style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {j.estado === "invitado" ? (
+                          <BadgeInvitado />
+                        ) : (
+                          <>
+                            {j.compatible ? <Badge tono="ok">Listo</Badge> : <Badge tono="warn">Falta foto</Badge>}
+                            {!j.tiene_consentimiento && <Badge tono="warn">Sin autorización</Badge>}
+                          </>
+                        )}
                       </div>
                     </td>
-                    <td className="act">
+                    <td className="act" data-tour={j.id === filtrados[0]?.id ? "acciones" : undefined}>
                       <Button icono sm variante="ghost" aria-label={`Marcar asistencia de hoy: ${j.nombre}`} title="Marcar hoy" onClick={() => marcar(j)}>
                         <CircleCheck size={16} />
                       </Button>
-                      <Button icono sm variante="ghost" aria-label={`Agregar foto a ${j.nombre}`} title="Agregar foto" onClick={() => setAccion({ tipo: "foto", j })}>
-                        <CamIcon size={16} />
+                      <Button icono sm variante="ghost" aria-label={`Editar a ${j.nombre}`} title="Editar nombre o categoría" onClick={() => abrirEditar(j)}>
+                        <Pencil size={16} />
                       </Button>
-                      {!j.consentimiento_tutor && (
+                      {j.estado === "invitado" ? (
+                        <Link className="s-btn icon sm ghost" href="/staff/solicitudes?qr=1" aria-label={`Enviar enlace de inscripción para ${j.nombre}`} title="Enviar enlace de inscripción">
+                          <QrCode size={16} />
+                        </Link>
+                      ) : (
+                        <Button icono sm variante="ghost" aria-label={`Agregar foto a ${j.nombre}`} title="Agregar foto" onClick={() => setAccion({ tipo: "foto", j })}>
+                          <CamIcon size={16} />
+                        </Button>
+                      )}
+                      {j.estado !== "invitado" && !j.tiene_consentimiento && (
                         <Button icono sm variante="ghost" aria-label={`Registrar autorización de ${j.nombre}`} title="Registrar autorización" onClick={() => setAccion({ tipo: "autorizar", j })}>
                           <ShieldCheck size={16} />
                         </Button>
@@ -207,6 +269,28 @@ export default function Jugadores() {
           </div>
         )}
       </section>
+
+      <Dialogo
+        abierto={accion?.tipo === "editar"}
+        onCerrar={cerrar}
+        titulo="Editar jugador"
+        pie={
+          <>
+            <Button onClick={cerrar}>Cancelar</Button>
+            <Button variante="primary" cargando={trabajando} disabled={nombreEd.trim().length < 2} onClick={guardarEdicion}>
+              Guardar
+            </Button>
+          </>
+        }
+      >
+        <CamposInvitado
+          nombre={nombreEd}
+          categoria={catEd}
+          categorias={accion?.j.categoria && !categoriasSede.includes(accion.j.categoria) ? [accion.j.categoria, ...categoriasSede] : categoriasSede}
+          onNombre={setNombreEd}
+          onCategoria={setCatEd}
+        />
+      </Dialogo>
 
       <Dialogo abierto={accion?.tipo === "foto"} onCerrar={cerrar} titulo="Agregar foto" ancho pie={<Button onClick={cerrar}>Cancelar</Button>}>
         <p className="muted">

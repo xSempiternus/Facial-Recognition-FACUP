@@ -4,6 +4,7 @@ import clsx from "clsx";
 import {
   CalendarCheck,
   ChevronRight,
+  ClipboardList,
   FlaskConical,
   LayoutDashboard,
   LogOut,
@@ -20,14 +21,16 @@ import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { cerrarSesion, leerToken, suscribirSesion } from "@/lib/staff-api";
+import { api, cerrarSesion, escucharPendientes, leerToken, suscribirSesion } from "@/lib/staff-api";
+import { nombreSedeGuardado, rutaSede, sedeGuardada } from "@/lib/sede";
 import { Skeleton } from "./ui";
 
-type Item = { href: string; texto: string; icono: LucideIcon; exacto?: boolean };
+type Item = { href: string; texto: string; corto?: string; icono: LucideIcon; exacto?: boolean };
 
 const NAV: Item[] = [
   { href: "/staff", texto: "Resumen", icono: LayoutDashboard, exacto: true },
   { href: "/staff/asistencia", texto: "Asistencia", icono: CalendarCheck },
+  { href: "/staff/solicitudes", texto: "Inscripciones", corto: "Solicitud.", icono: ClipboardList },
   { href: "/staff/jugadores", texto: "Jugadores", icono: Users },
   { href: "/staff/inscribir", texto: "Inscribir", icono: UserPlus },
   { href: "/staff/reportes", texto: "Reportes", icono: TrendingUp },
@@ -44,6 +47,42 @@ function useSesion() {
     () => leerToken(),
     () => undefined,
   );
+}
+
+function useNombreSede() {
+  return useSyncExternalStore(
+    suscribirSesion,
+    () => nombreSedeGuardado(),
+    () => undefined,
+  );
+}
+
+/** Cantidad de solicitudes por aprobar: al entrar, al volver a la pestaña, cada minuto y cuando una página lo avisa. */
+function usePendientesSolicitudes(activo: boolean, ruta: string) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    if (!activo) return;
+    let vivo = true;
+    const cargar = () =>
+      api
+        .solicitudes()
+        .then((l) => vivo && setN(l.length))
+        .catch(() => {
+          /* el globo es solo informativo */
+        });
+    cargar();
+    const t = window.setInterval(cargar, 60_000);
+    const al = () => document.visibilityState === "visible" && cargar();
+    document.addEventListener("visibilitychange", al);
+    const off = escucharPendientes((x) => vivo && setN(x));
+    return () => {
+      vivo = false;
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", al);
+      off();
+    };
+  }, [activo, ruta]);
+  return n;
 }
 
 function usePrefColapsado() {
@@ -73,9 +112,11 @@ export function Shell({ children }: { children: ReactNode }) {
   const ruta = usePathname();
   const [colapsado, setColapsado] = usePrefColapsado();
   const [paleta, setPaleta] = useState(false);
+  const sede = useNombreSede();
+  const pendientes = usePendientesSolicitudes(!!token, ruta);
 
   useEffect(() => {
-    if (token === null) router.replace("/");
+    if (token === null) router.replace(rutaSede(sedeGuardada(), "/"));
   }, [token, router]);
 
   useEffect(() => {
@@ -103,8 +144,9 @@ export function Shell({ children }: { children: ReactNode }) {
   const activo = (n: Item) => (n.exacto ? ruta === n.href : ruta.startsWith(n.href));
   const actual = NAV.find(activo);
   const salir = () => {
+    const volver = rutaSede(sedeGuardada(), "/");
     cerrarSesion();
-    router.replace("/");
+    router.replace(volver);
   };
   const ir = (href: string) => {
     setPaleta(false);
@@ -118,15 +160,20 @@ export function Shell({ children }: { children: ReactNode }) {
           <div className="s-brand">
             <span className="s-logo s-logo-chico" aria-hidden />
             <span className="s-logo-full" role="img" aria-label="FA CUP Chile" />
-            <span className="s-brand-t">Staff</span>
+            <span className="s-brand-t" title={sede}>Staff</span>
           </div>
           <LayoutGroup id="side">
-            <nav className="s-nav">
+            <nav className="s-nav" data-tour="menu">
               {NAV.map((n) => (
-                <Link key={n.href} href={n.href} className="s-link" title={n.texto} aria-current={activo(n) ? "page" : undefined}>
+                <Link key={n.href} href={n.href} className="s-link" title={n.texto} data-tour={`nav-${n.href.split("/").pop()}`} aria-current={activo(n) ? "page" : undefined}>
                   {activo(n) && <motion.span layoutId="ind-side" className="s-ind" transition={{ type: "spring", stiffness: 520, damping: 40 }} />}
                   <n.icono size={17} aria-hidden />
                   <span>{n.texto}</span>
+                  {n.href === "/staff/solicitudes" && pendientes > 0 && (
+                    <span className="s-count" aria-label={`${pendientes} por aprobar`}>
+                      {pendientes}
+                    </span>
+                  )}
                 </Link>
               ))}
               <div className="s-nav-sep">Próximamente</div>
@@ -159,7 +206,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <header className="s-top">
             <span className="s-logo-full s-mobile-only" role="img" aria-label="FA CUP Chile" />
             <nav className="s-crumbs" aria-label="Ubicación">
-              <span className="hide-sm">Staff</span>
+              <span className="hide-sm">{sede ? `Staff · ${sede}` : "Staff"}</span>
               <ChevronRight size={14} aria-hidden className="hide-sm" />
               <strong>{actual ? MIGAS[actual.href] : "Panel"}</strong>
             </nav>
@@ -185,7 +232,12 @@ export function Shell({ children }: { children: ReactNode }) {
               <Link key={n.href} href={n.href} className="s-tab" aria-current={activo(n) ? "page" : undefined}>
                 {activo(n) && <motion.span layoutId="ind-tab" className="s-ind" transition={{ type: "spring", stiffness: 520, damping: 40 }} />}
                 <n.icono size={20} aria-hidden />
-                <span>{n.texto}</span>
+                <span>{n.corto ?? n.texto}</span>
+                {n.href === "/staff/solicitudes" && pendientes > 0 && (
+                  <span className="s-count" aria-label={`${pendientes} por aprobar`}>
+                    {pendientes}
+                  </span>
+                )}
               </Link>
             ))}
           </nav>

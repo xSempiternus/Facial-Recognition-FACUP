@@ -39,6 +39,8 @@ type Opciones = {
   seguimiento?: Seguimiento;
   /** Elemento donde se ve el video (el escenario). Si no se da, es la ventana. `objetivo` va en px de ese elemento. */
   escenario?: RefObject<HTMLElement | null>;
+  /** La vista se muestra en espejo (cámara frontal). La trasera no: el rastro y las coordenadas deben coincidir. */
+  espejo?: boolean;
   /** Recibe, en cada análisis, los puntos de referencia y la caja de la cara (normalizados), para dibujarlos. */
   rastro?: RefObject<Rastro>;
 };
@@ -48,7 +50,7 @@ const URL_MODELO_REMOTO =
 const RUTAS_MODELO = ["/models/face_landmarker.task", "/modelos/face-landmarker.task", URL_MODELO_REMOTO];
 
 export function useRastreoCara({
-  video, objetivo, progreso, activo, intento, onCaptura, onCapturando, onCapturaFallida, mantenerAnillo = false, seguimiento, escenario, rastro,
+  video, objetivo, progreso, activo, intento, onCaptura, onCapturando, onCapturaFallida, mantenerAnillo = false, seguimiento, escenario, espejo = true, rastro,
 }: Opciones) {
   const [listo, setListo] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,11 +66,15 @@ export function useRastreoCara({
 
   const detector = useRef<FaceLandmarker | null>(null);
   const activoRef = useRef(activo);
+  const espejoRef = useRef(espejo);
   const capturaRef = useRef({ onCaptura, onCapturando, onCapturaFallida });
   useEffect(() => {
     activoRef.current = activo;
     if (!activo && !mantenerAnillo) progreso.set(0);
   }, [activo, mantenerAnillo, progreso]);
+  useEffect(() => {
+    espejoRef.current = espejo;
+  }, [espejo]);
   useEffect(() => {
     capturaRef.current = { onCaptura, onCapturando, onCapturaFallida };
   }, [onCaptura, onCapturando, onCapturaFallida]);
@@ -171,7 +177,7 @@ export function useRastreoCara({
         R.t = ahora;
         R.hay = hayCara;
         R.fija = false;
-        R.espejo = true;
+        R.espejo = espejoRef.current;
         R.ancho = v.videoWidth;
         R.alto = v.videoHeight;
         if (puntos) {
@@ -195,12 +201,12 @@ export function useRastreoCara({
         }
       }
 
-      // Del espacio del video (object-fit: cover, en espejo) al de la pantalla.
+      // Del espacio del video (object-fit: cover, en espejo solo con la frontal) al de la pantalla.
       const escala = Math.max(W / v.videoWidth, H / v.videoHeight);
       const dx = (W - v.videoWidth * escala) / 2;
       const dy = (H - v.videoHeight * escala) / 2;
       const aPantalla = (p: NormalizedLandmark) => ({
-        x: W - (p.x * v.videoWidth * escala + dx),
+        x: espejoRef.current ? W - (p.x * v.videoWidth * escala + dx) : p.x * v.videoWidth * escala + dx,
         y: p.y * v.videoHeight * escala + dy,
       });
 

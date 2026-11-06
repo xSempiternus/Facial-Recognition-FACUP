@@ -21,6 +21,8 @@ import { ApiError, iniciarSesion, leerToken } from "@/lib/staff-api";
 import { useAreaVisible } from "@/lib/teclado";
 import { iniciarSonidos, sonar } from "@/lib/sonidos";
 import { desbloquearVoz } from "@/lib/voz";
+import { rutaSede } from "@/lib/sede";
+import { SedeNoExiste, useSede } from "./useSede";
 import { iniciarCalidad } from "@/components/kiosko/calidad";
 import FondoVivo from "@/components/kiosko/FondoVivo";
 
@@ -29,7 +31,13 @@ const SPRING = { type: "spring", stiffness: 210, damping: 30, mass: 0.9 } as con
 
 type Fase = "menu" | "clave" | "saliendo";
 
-export default function Menu() {
+export default function Menu({ sede }: { sede?: string }) {
+  const s = useSede(sede);
+  if (s.estado === "no_existe" && sede) return <SedeNoExiste slug={sede} />;
+  return <MenuPantalla sede={sede} nombreSede={s.estado === "ok" ? s.info.nombre : undefined} />;
+}
+
+function MenuPantalla({ sede, nombreSede }: { sede?: string; nombreSede?: string }) {
   const router = useRouter();
   const [fase, setFase] = useState<Fase>("menu");
 
@@ -41,9 +49,9 @@ export default function Menu() {
 
   useEffect(() => {
     iniciarCalidad();
-    router.prefetch("/asistencia");
+    router.prefetch(rutaSede(sede, "/asistencia"));
     router.prefetch("/staff");
-  }, [router]);
+  }, [router, sede]);
 
   // Esc cierra la hoja de la clave.
   useEffect(() => {
@@ -67,7 +75,7 @@ export default function Menu() {
     sonar("tap");
     precalentar();
     // Se conservan ?voz, ?prueba, ?demo, ?calidad al entrar al reconocimiento.
-    router.push(`/asistencia${window.location.search}`);
+    router.push(`${rutaSede(sede, "/asistencia")}${window.location.search}`);
   }
 
   function admin() {
@@ -157,6 +165,7 @@ export default function Menu() {
                     Fútbol
                     <br />y Amistad
                   </h1>
+                  {nombreSede && <p className="menu-sede">{/^sede\s/i.test(nombreSede) ? nombreSede : `Sede ${nombreSede}`}</p>}
                   <p className="menu-sub">
                     Qué bueno tenerlos hoy en la cancha. Registra la llegada de los jugadores.
                   </p>
@@ -184,6 +193,7 @@ export default function Menu() {
                   setFase("menu");
                 }}
                 onCorrecto={entrarAlPanel}
+                sede={sede}
               />
             )}
           </AnimatePresence>
@@ -198,10 +208,12 @@ function HojaClave({
   visible,
   onVolver,
   onCorrecto,
+  sede,
 }: {
   visible: boolean;
   onVolver: () => void;
   onCorrecto: () => void;
+  sede?: string;
 }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -223,7 +235,7 @@ function HojaClave({
     setCargando(true);
     setError(null);
     try {
-      await iniciarSesion(pin);
+      await iniciarSesion(pin, sede);
       onCorrecto();
     } catch (err) {
       sonar("error");

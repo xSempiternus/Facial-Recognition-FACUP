@@ -1,6 +1,7 @@
 "use client";
 
 import clsx from "clsx";
+import { createPortal } from "react-dom";
 import { Loader2 } from "lucide-react";
 import {
   createContext,
@@ -10,6 +11,7 @@ import {
   useEffectEvent,
   useId,
   useRef,
+  useSyncExternalStore,
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
@@ -108,8 +110,36 @@ export function Button({ variante = "default", sm, icono, block, cargando, class
   );
 }
 
+/** Vuelve a cargar al regresar a la pestaña (con un mínimo de 5 s entre cargas). */
+export function useRefrescoAlVolver(recargar: () => void) {
+  const f = useEffectEvent(recargar);
+  useEffect(() => {
+    let ultimo = Date.now();
+    const al = () => {
+      if (document.visibilityState === "visible" && Date.now() - ultimo > 5000) {
+        ultimo = Date.now();
+        f();
+      }
+    };
+    document.addEventListener("visibilitychange", al);
+    window.addEventListener("focus", al);
+    return () => {
+      document.removeEventListener("visibilitychange", al);
+      window.removeEventListener("focus", al);
+    };
+  }, []);
+}
+
 export function Badge({ tono, children }: { tono?: "ok" | "warn" | "err"; children: ReactNode }) {
   return <span className={cn("s-badge", tono)}>{children}</span>;
+}
+
+export function BadgeInvitado() {
+  return (
+    <span className="s-badge inv" title="Vino a probarse: aún no tiene autorización de imagen">
+      Invitado
+    </span>
+  );
 }
 
 export function Skeleton({ w = "100%", h = 14 }: { w?: number | string; h?: number }) {
@@ -246,6 +276,8 @@ export function FiltroCategorias({
 
 // ------------------------------------------------------------------ diálogo (nativo: foco atrapado y Esc gratis)
 
+const subVacio = () => () => {};
+
 export function Dialogo({
   abierto,
   onCerrar,
@@ -253,6 +285,7 @@ export function Dialogo({
   children,
   pie,
   ancho,
+  completa,
 }: {
   abierto: boolean;
   onCerrar: () => void;
@@ -260,18 +293,23 @@ export function Dialogo({
   children: ReactNode;
   pie?: ReactNode;
   ancho?: boolean;
+  /** Pantalla completa (para mostrar un QR al apoderado). */
+  completa?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const montado = useSyncExternalStore(subVacio, () => true, () => false);
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
     if (abierto && !d.open) d.showModal();
     if (!abierto && d.open) d.close();
-  }, [abierto]);
-  return (
+  }, [abierto, montado]);
+  const destino = montado ? (document.querySelector(".staff") ?? document.body) : null;
+  if (!destino) return null;
+  return createPortal(
     <dialog
       ref={ref}
-      className={cn("s-dialog", ancho && "wide")}
+      className={cn("s-dialog", ancho && "wide", completa && "full")}
       aria-label={titulo}
       onClose={onCerrar}
       onClick={(e) => {
@@ -287,7 +325,8 @@ export function Dialogo({
           {pie && <div className="s-dialog-f">{pie}</div>}
         </>
       )}
-    </dialog>
+    </dialog>,
+    destino,
   );
 }
 

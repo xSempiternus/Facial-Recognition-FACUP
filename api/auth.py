@@ -1,4 +1,7 @@
-"""Autenticación del staff: PIN -> token firmado (HMAC) con vencimiento. Sin dependencias extra."""
+"""Autenticación del staff: PIN de la sede -> token firmado (HMAC) con vencimiento y claim `sede`. Sin dependencias extra.
+
+Cada sede tiene su PIN (hash PBKDF2 en data/control.db). STAFF_PIN solo se usa como PIN inicial de la sede
+migrada/por defecto al crearla; después manda el hash guardado (cámbialo con scripts/crear_sede.py)."""
 
 import base64
 import hashlib
@@ -10,6 +13,8 @@ import time
 from collections import defaultdict, deque
 
 from fastapi import Header, HTTPException, Request
+
+from src import sedes
 
 STAFF_PIN = os.getenv("STAFF_PIN", "1234")
 PIN_POR_DEFECTO = "STAFF_PIN" not in os.environ
@@ -39,28 +44,39 @@ def _firma(carga: str) -> str:
     return _b64(hmac.new(_SECRET, carga.encode(), hashlib.sha256).digest())
 
 
-def emitir_token() -> str:
-    carga = _b64(json.dumps({"exp": int(time.time()) + TOKEN_TTL_S}).encode())
+def emitir_token(sede: str) -> str:
+    carga = _b64(json.dumps({"exp": int(time.time()) + TOKEN_TTL_S, "sede": sede}).encode())
     return f"{carga}.{_firma(carga)}"
 
 
-def token_valido(token: str) -> bool:
+def sede_del_token(token: str) -> str | None:
+    """Slug de la sede si el token es auténtico, no venció y trae un claim `sede` válido; si no, None."""
     carga, _, firma = token.partition(".")
     if not carga or not hmac.compare_digest(firma, _firma(carga)):
-        return False
+        return None
     try:
         relleno = "=" * (-len(carga) % 4)
-        exp = json.loads(base64.urlsafe_b64decode(carga + relleno))["exp"]
+        datos = json.loads(base64.urlsafe_b64decode(carga + relleno))
+        exp, sede = datos["exp"], datos["sede"]
     except (ValueError, KeyError, TypeError):
-        return False
-    return isinstance(exp, int) and exp > time.time()
+        return None
+    if not (isinstance(exp, int) and exp > time.time() and isinstance(sede, str) and sedes.slug_valido(sede)):
+        return None
+    return sede
 
 
-def requerir_staff(authorization: str | None = Header(None)) -> None:
-    """Dependencia de FastAPI: exige `Authorization: Bearer <token>`."""
+def token_valido(token: str) -> bool:
+    return sede_del_token(token) is not None
+
+
+def requerir_staff(authorization: str | None = Header(None)) -> str:
+    """Dependencia de FastAPI: exige `Authorization: Bearer <token>` y retorna el slug de la sede del token.
+    La sede debe seguir existiendo y activa (si se desactiva, sus tokens dejan de servir)."""
     esquema, _, token = (authorization or "").partition(" ")
-    if esquema.lower() != "bearer" or not token_valido(token.strip()):
+    sede = sede_del_token(token.strip()) if esquema.lower() == "bearer" else None
+    if sede is None or not sedes.existe(sede):
         _error(401, "no_autorizado", "Sesión no válida o vencida. Ingresa de nuevo con el PIN.")
+    return sede
 
 
 def _cliente(request: Request) -> str:
@@ -78,18 +94,20 @@ def _podar(cola: deque, ahora: float) -> None:
         cola.popleft()
 
 
-def verificar_pin(pin: str, request: Request) -> str:
-    """Valida el PIN con límite de intentos fallidos y retorna un token nuevo."""
+def verificar_pin(pin: str, request: Request, sede: str) -> str:
+    """Valida el PIN de la sede con límite de intentos fallidos (por sede + cliente) y retorna un token nuevo."""
     ahora = time.time()
-    cliente = _cliente(request)
+    if not sedes.existe(sede):
+        _error(404, "sede_no_existe", "La sede no existe.")
+    cliente = f"{sede}|{_cliente(request)}"
     cola = _fallos[cliente]
     _podar(cola, ahora)
     _podar(_fallos_global, ahora)
     if len(cola) >= MAX_FALLOS_POR_CLIENTE or len(_fallos_global) >= MAX_FALLOS_GLOBAL:
         _error(429, "demasiados_intentos", "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.")
-    if not hmac.compare_digest(pin.encode(), STAFF_PIN.encode()):
+    if not sedes.verificar_pin(sede, pin):
         cola.append(ahora)
         _fallos_global.append(ahora)
         _error(401, "pin_incorrecto", "PIN incorrecto. Inténtalo de nuevo.")
     cola.clear()
-    return emitir_token()
+    return emitir_token(sede)

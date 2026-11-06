@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from api.auth import _cliente
+from src.sedes import DATA_DIR
 
 VOZ = os.getenv("VOZ_TTS", "es-CL-CatalinaNeural")
 RITMO = os.getenv("VOZ_RITMO", "+0%")
@@ -30,7 +31,7 @@ GEMINI_ESTILO = os.getenv(
     "con acento chileno, tono cálido, alegre y cercano, como un entrenador que recibe a un niño; natural y sin exagerar",
 )
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
-CARPETA = Path(__file__).resolve().parent.parent / "data" / "voz"
+CARPETA = DATA_DIR / "voz"  # compartida entre sedes: solo frases con nombres de pila
 
 # tipo -> plantilla ({n} = primer nombre del jugador, solo letras)
 FRASES = {

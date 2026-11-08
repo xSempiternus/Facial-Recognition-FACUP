@@ -1,13 +1,14 @@
 "use client";
 
 // Pantalla de reconocimiento FA CUP Chile, a pantalla completa (estilo Face ID): la cámara ocupa todo el teléfono y
-// encima van el título, cuatro esquinas que encuadran la cara y la siguen, puntitos de referencia, el porcentaje de
-// "mantén la posición" y una barra de vidrio con las llegadas de hoy y "Salir". Al reconocer, la foto se congela
+// encima van el título (guía de postura en texto vivo), cuatro esquinas que encuadran la cara y la siguen, puntitos de
+// referencia, un arco fino que se completa al quedarse quieto, un aviso de luz y las llegadas de hoy. Al capturar, el
+// fotograma se congela con un destello suave y el marco respira ("Reconociendo…"). Al reconocer, la foto se congela
 // nítida, las esquinas se cierran en verde y una tarjeta de vidrio muestra el nombre. Sin botones para registrar:
 // al quedarse quieto, la foto se saca sola. En escritorio / horizontal la cámara vive en un escenario vertical (~3:4).
 
-import { AnimatePresence, motion, MotionConfig, useMotionValue, type MotionValue } from "motion/react";
-import { ChevronLeft, SwitchCamera } from "lucide-react";
+import { AnimatePresence, motion, MotionConfig, useMotionValue } from "motion/react";
+import { ChevronLeft, Sun, SwitchCamera } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { abrirCamara, contarCamaras, facingInicial, guardarFacing, type Facing } from "@/lib/camara";
@@ -17,12 +18,13 @@ import { llegadasDeHoy, noSoyYo, precalentar, verificar, type Verificacion } fro
 import { calidadActual, iniciarCalidad, restriccionesCamara, useCalidad } from "./calidad";
 import Aurora, { type ModoAurora } from "./Aurora";
 import Insignia from "./Insignia";
+import { useLuz } from "./luz";
 import Marco, { type Guia, type ModoMarco } from "./Marco";
 import { crearRastro, PUNTOS_REF, type Rastro } from "./rastro";
 import Rodillo from "./Rodillo";
 import Tarjeta, { type TextoTarjeta } from "./Tarjeta";
 import { k } from "./tiempo";
-import { capturarFoto, useRastreoCara, type Objetivo, type Postura } from "./useRastreoCara";
+import { capturarFoto, useRastreoCara, type Desvio, type Objetivo, type Postura } from "./useRastreoCara";
 
 const MOSTRAR_RESULTADO_MS = 4200;
 const GRACIAS_MS = 2800; // tras "¿No eres tú?", el mensaje de gracias queda visible este tiempo
@@ -40,11 +42,18 @@ const ANIMOS = ["¡A la cancha!", "¡Hoy se juega!", "¡A jugar!", "¡Con todo h
 const animo = () => ANIMOS[Math.floor(Math.random() * ANIMOS.length)];
 
 const GUIA: Record<Postura, { titulo: string; sub: string }> = {
-  "sin-cara": { titulo: "¡Registra tu llegada!", sub: "Mira a la cámara, sin prisa" },
+  "sin-cara": { titulo: "Párate frente a la pantalla", sub: "Mira a la cámara, sin prisa" },
   lejos: { titulo: "Acércate un poco", sub: "Llena el marco con tu cara" },
   cerca: { titulo: "Aléjate un poco", sub: "Estás muy cerca de la cámara" },
   descentrado: { titulo: "Centra tu cara", sub: "Ponla dentro del marco" },
-  quieto: { titulo: "Mantén la posición", sub: "Ya casi" },
+  quieto: { titulo: "Quédate quieto", sub: "Ya casi" },
+};
+// Cuando la cara está descentrada, el texto dice hacia dónde moverse (la imagen está en espejo con la cámara frontal).
+const GUIA_DESVIO: Record<Desvio, { titulo: string; sub: string }> = {
+  arriba: { titulo: "Baja un poco la mirada", sub: "Tu cara está muy arriba" },
+  abajo: { titulo: "Sube un poco la mirada", sub: "Tu cara está muy abajo" },
+  izq: { titulo: "Centra tu cara", sub: "Muévete un poco a la derecha" },
+  der: { titulo: "Centra tu cara", sub: "Muévete un poco a la izquierda" },
 };
 
 function mensajeErrorCamara(e: unknown) {
@@ -124,7 +133,7 @@ function aResultado(v: Verificacion): { resultado: Resultado; frase: Frase | nul
   }
 }
 
-// Vista previa de estados para diseño/QA: ?demo=buscando|alinear|escaneando|reconocido|ya|noreconoce|sinrostro|error|camara.
+// Vista previa de estados para diseño/QA: ?demo=buscando|alinear|lejos|escaneando|verificando|pocaluz|contraluz|reconocido|ya|noreconoce|sinrostro|error|camara|denegada.
 // Solo existe fuera de producción; en producción el parámetro se ignora.
 const suscribirNada = () => () => {};
 const demoActual = () => (process.env.NODE_ENV === "production" ? "" : new URLSearchParams(window.location.search).get("demo") ?? "");
@@ -152,20 +161,7 @@ const DEMO_PUNTOS: [number, number][] = [
   [192, 478], [95, 375], [290, 380], [190, 255], // mentón, laterales, frente
 ];
 const DEMO_CAJA = { x0: 95, y0: 255, x1: 290, y1: 482 };
-const DEMO_SIN_CARA = new Set(["buscando", "error", "camara"]);
-
-// Número 0..100 que sigue al progreso escribiendo directo en el DOM (sin setState por cuadro).
-function Porcentaje({ progreso }: { progreso: MotionValue<number> }) {
-  const el = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    const poner = (v: number) => {
-      if (el.current) el.current.textContent = String(Math.round(v * 100));
-    };
-    poner(progreso.get());
-    return progreso.on("change", poner);
-  }, [progreso]);
-  return <span ref={el} className="inline-block w-[2.05ch] text-right">0</span>;
-}
+const DEMO_SIN_CARA = new Set(["buscando", "error", "camara", "denegada"]);
 
 export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const demo = useDemo();
@@ -173,6 +169,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const escenario = useRef<HTMLDivElement>(null);
   const progreso = useMotionValue(0);
+  const alineacion = useMotionValue(0);
   const calidad = useCalidad();
   const [rastroInicial] = useState(crearRastro);
   const rastro = useRef<Rastro>(rastroInicial);
@@ -368,20 +365,23 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     },
     [],
   );
-  const alCapturando = useCallback(() => setFase("enviando"), []);
+  const alCapturando = useCallback(() => {
+    setFotoUrl(null); // la del intento anterior ya no sirve: se congela el fotograma nuevo apenas esté listo
+    setFase("enviando");
+  }, []);
   const alFallarCaptura = useCallback(() => setFase("escaneando"), []);
   const [reintentandoRed, setReintentandoRed] = useState(false);
   const alCapturar = useCallback(async (foto: Blob) => {
     pendiente.current?.abort();
     const ctl = (pendiente.current = new AbortController());
     setReintentandoRed(false);
+    setFotoUrl(URL.createObjectURL(foto)); // el fotograma queda congelado mientras se verifica
     const v = await verificar(foto, ctl.signal, () => {
       if (pendiente.current === ctl) setReintentandoRed(true);
     });
     if (pendiente.current !== ctl) return; // cancelada o reemplazada
     setReintentandoRed(false);
     const { resultado, frase } = aResultado(v);
-    setFotoUrl(URL.createObjectURL(foto));
     // El contador sube cuando la secuencia de éxito avanza: el rodillo se ve, no pasa de golpe.
     if (v.ok && !v.yaRegistrado) {
       clearTimeout(subeContador.current);
@@ -394,7 +394,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     if (frase && voz.current) hablar(frase);
   }, []);
 
-  const { listo: listoReal, error: errorModeloReal, postura: posturaReal } = useRastreoCara({
+  const { listo: listoReal, error: errorModeloReal, postura: posturaReal, desvio: desvioReal } = useRastreoCara({
     video,
     objetivo,
     progreso,
@@ -407,18 +407,30 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     escenario,
     espejo,
     rastro: enDemo ? undefined : rastro,
+    alineacion,
   });
 
   // Vista previa (solo desarrollo): fuerza fase/resultado/postura sin cámara.
   const demoResultado = useMemo(() => (demo && DEMO_VERIFICACION[demo] ? aResultado(DEMO_VERIFICACION[demo]).resultado : null), [demo]);
-  const fase = demoResultado ? "resultado" : faseReal;
+  const fase = demoResultado ? "resultado" : demo === "verificando" ? "enviando" : faseReal;
   const resultado = demoResultado ?? resultadoReal;
   const listo = enDemo || listoReal;
   const errorModelo = enDemo ? null : errorModeloReal;
-  const postura: Postura = demo === "escaneando" ? "quieto" : demo === "buscando" ? "sin-cara" : demo === "alinear" ? "descentrado" : enDemo ? "quieto" : posturaReal;
+  const postura: Postura = demo === "escaneando" ? "quieto" : demo === "buscando" ? "sin-cara" : demo === "alinear" || demo === "pocaluz" || demo === "contraluz" ? "descentrado" : demo === "lejos" ? "lejos" : enDemo ? "quieto" : posturaReal;
+  const desvio: Desvio | null = enDemo ? (demo === "alinear" ? "der" : null) : desvioReal;
   useEffect(() => {
-    if (demo === "escaneando") progreso.set(0.62);
-  }, [demo, progreso]);
+    if (!enDemo) return;
+    progreso.set(demo === "escaneando" ? 0.62 : demo === "verificando" ? 1 : 0);
+    alineacion.set(demo === "buscando" ? 0 : demo === "alinear" || demo === "lejos" || demo === "pocaluz" || demo === "contraluz" ? 0.35 : 1);
+  }, [enDemo, demo, progreso, alineacion]);
+
+  // El texto de postura espera ~250 ms de estabilidad antes de cambiar: sin parpadeo cuando la detección oscila.
+  const [guiaVista, setGuiaVista] = useState<{ postura: Postura; desvio: Desvio | null }>({ postura: "sin-cara", desvio: null });
+  useEffect(() => {
+    const d = postura === "descentrado" ? desvio : null;
+    const id = setTimeout(() => setGuiaVista({ postura, desvio: d }), 250);
+    return () => clearTimeout(id);
+  }, [postura, desvio]);
 
   // Demo: la cara de ejemplo (recorte de campeones.jpg) ocupa el óvalo guía; los puntos y la caja simulados caen sobre ella.
   const demoConCara = enDemo && !DEMO_SIN_CARA.has(demo);
@@ -491,7 +503,8 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     return () => clearTimeout(id);
   }, [esperarSalida, postura]);
 
-  const sinCamara = enDemo ? demo === "camara" : Boolean(errorCamara);
+  const sinCamara = enDemo ? demo === "camara" || demo === "denegada" : Boolean(errorCamara);
+  const camaraDenegada = enDemo ? demo === "denegada" : Boolean(errorCamara?.startsWith("Permiso de cámara denegado"));
   // El modelo de caras no cargó (red lenta, equipo modesto): se puede seguir con captura manual.
   const modoManual = !enDemo && Boolean(errorModelo) && !errorCamara;
 
@@ -510,6 +523,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const tomarManual = useCallback(async () => {
     const v = video.current;
     if (!v || !v.videoWidth) return;
+    setFotoUrl(null);
     setFase("enviando");
     let foto: Blob | null = null;
     try {
@@ -527,13 +541,12 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const hayError = sinCamara || (resultadoVisible && tono === "error");
   const T = k();
 
-  // Sonidos de la secuencia: cara detectada -> bloqueo (empieza el escaneo) -> captura -> resultado.
+  // Sonidos de la secuencia: cara detectada -> resultado (sin sonido de escaneo ni de captura).
   const anterior = useRef<{ postura: Postura; fase: string }>({ postura: "sin-cara", fase: "escaneando" });
   useEffect(() => {
     const a = anterior.current;
     if (fase === "escaneando" && a.postura === "sin-cara" && postura !== "sin-cara") sonar("rostro");
-    if (fase === "escaneando" && postura === "quieto" && a.postura !== "quieto") sonar("bloqueo");
-    if (fase === "enviando" && a.fase !== "enviando") sonar("captura");
+
     anterior.current = { postura, fase };
   }, [postura, fase]);
   useEffect(() => {
@@ -544,26 +557,29 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
 
   // Texto de arriba (guía) y tarjeta de abajo (resultado).
   const cartaTexto: TextoTarjeta | null = sinCamara
-    ? {
-        titulo: "Cámara no disponible",
-        sub: errorCamara ?? "Permite el acceso a la cámara en el navegador y toca Reintentar.",
-      }
+    ? camaraDenegada
+      ? { titulo: "Cámara bloqueada", sub: "Permite el acceso a la cámara en los ajustes del navegador y toca Reintentar." }
+      : { titulo: "Cámara no disponible", sub: errorCamara ?? "Revisa la cámara y toca Reintentar." }
     : resultadoVisible
       ? resultado
       : null;
   let arriba: { titulo: string; sub: string };
-  if (sinCamara || (resultadoVisible && tono === "error")) arriba = { titulo: "Hay un problema", sub: "Avisa al staff" };
+  if (sinCamara) arriba = camaraDenegada ? { titulo: "Activa la cámara", sub: "Necesitamos verte para registrar tu llegada" } : { titulo: "Hay un problema", sub: "Avisa al staff" };
+  else if (resultadoVisible && tono === "error") arriba = { titulo: "Hay un problema", sub: "Avisa al staff" };
   else if (resultadoVisible && tono === "aviso") arriba = { titulo: "Intenta de nuevo", sub: "Mira de frente, con buena luz" };
   else if (exito) arriba = sobrio ? { titulo: "Ya estabas registrado", sub: "Tu llegada de hoy ya estaba lista" } : { titulo: "¡Llegada registrada!", sub: "Bienvenido a FA CUP" };
   else if (reintentandoRed && fase === "enviando") arriba = { titulo: "Sin conexión, reintentando…", sub: "No te muevas" };
-  else if (fase === "enviando") arriba = { titulo: "Casi listo", sub: "Un momento" };
+  else if (fase === "enviando") arriba = { titulo: "Reconociendo…", sub: "Un momento" };
   else if (modoManual) arriba = { titulo: "Toma tu foto", sub: "Pon tu cara en el marco y toca el botón" };
   else if (!enDemo && !camaraLista) arriba = { titulo: "Permite la cámara para continuar", sub: "Acepta el aviso del navegador" };
   else if (!listo) arriba = { titulo: "Preparando la cámara", sub: cargaLenta ? "Conexión lenta, cargando…" : "Un momento" };
   else if (esperarSalida && postura !== "sin-cara") arriba = { titulo: "Listo", sub: "Puede pasar el siguiente" };
-  else arriba = GUIA[postura];
+  else arriba = guiaVista.desvio ? GUIA_DESVIO[guiaVista.desvio] : GUIA[guiaVista.postura];
 
-  const mostrarPorcentaje = !sinCamara && !resultadoVisible && (fase === "enviando" || (postura === "quieto" && !esperarSalida && listo));
+  // Luz: con el rastreo activo se mide cada 500 ms; en demo se simula con ?demo=pocaluz|contraluz.
+  const luzReal = useLuz(video, rastro, faseReal === "escaneando" && !esperarSalida && listoReal && !enDemo);
+  const luz = enDemo ? (demo === "pocaluz" ? "poca" : demo === "contraluz" ? "contraluz" : "ok") : luzReal;
+  const avisoLuz = !sinCamara && !resultadoVisible && fase !== "enviando" && luz !== "ok" ? luz : null;
   const modoMarco: ModoMarco = hayError
     ? "error"
     : resultadoVisible
@@ -580,7 +596,8 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const modoAurora: ModoAurora = hayError ? "error" : resultadoVisible ? (tono === "aviso" ? "aviso" : "exito") : "escaneo";
 
   // Foto del niño nítida a pantalla completa (cuadro capturado; en demo, el recorte de campeones.jpg).
-  const mostrarFoto = resultadoVisible && tono !== "error" && (enDemo ? demo !== "error" : Boolean(fotoUrl));
+  const congelando = fase === "enviando" && (enDemo || Boolean(fotoUrl)); // fotograma congelado mientras se verifica
+  const mostrarFoto = congelando || (resultadoVisible && tono !== "error" && (enDemo ? demo !== "error" : Boolean(fotoUrl)));
   const demoFondo = enDemo && demo !== "camara" && demo !== "error";
   const fotoDemo: React.CSSProperties = demoConCara
     ? {
@@ -641,7 +658,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
                 <motion.div
                   className="absolute inset-0"
                   style={{ transformOrigin: `${guia.cx}px ${guia.cy}px` }}
-                  initial={{ scale: 1.045 }}
+                  initial={{ scale: 1.02 }}
                   animate={{ scale: 1 }}
                   transition={{ duration: 1.2 * T, ease: EASE }}
                 >
@@ -660,6 +677,17 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
           <div className="reco-velo-sup" aria-hidden />
           <div className="reco-velo-inf" aria-hidden />
 
+          {/* Destello blanco muy sutil (~200 ms) al capturar: el fotograma queda congelado debajo */}
+          {fase === "enviando" && (
+            <motion.div
+              key={`captura${repetir}`}
+              className="pointer-events-none absolute inset-0 z-[2] bg-white"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 0.2, 0] }}
+              transition={{ duration: 0.2 * T, times: [0, 0.3, 1], ease: "easeOut" }}
+            />
+          )}
+
           {/* Destello suave al reconocer */}
           {exito && (
             <motion.div
@@ -672,7 +700,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
           )}
 
           {/* Brackets, puntitos, onda de luz y chispas (lienzo propio, sin re-render por cuadro) */}
-          <Marco key={`marco${repetir}`} rastro={rastro} modo={modoMarco} guia={guia} ancho={sw} alto={sh} />
+          <Marco key={`marco${repetir}`} rastro={rastro} modo={modoMarco} guia={guia} ancho={sw} alto={sh} progreso={progreso} alineacion={alineacion} />
 
           {/* Título y subtítulo arriba, con transiciones cortas */}
           {onSalir && (
@@ -702,8 +730,11 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
               <SwitchCamera size={20} strokeWidth={2} aria-hidden />
             </button>
           )}
-          <header className="absolute inset-x-0 top-0 z-[4] flex flex-col items-center px-6 pt-[max(1.1rem,env(safe-area-inset-top))] text-center">
-            <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="mb-3 h-6 w-auto opacity-90 drop-shadow-[0_2px_8px_rgba(0,0,0,.45)]" />
+          <header className="absolute inset-x-0 top-0 z-[4] flex flex-col items-center px-16 pt-[max(0.9rem,env(safe-area-inset-top))] text-center">
+            {/* Misma altura (44 px) y línea que los botones de volver / voltear: el logo queda centrado con ellos */}
+            <div className="mb-2 flex h-11 items-center">
+              <Image src="/logo-blanco.png" alt="FA CUP Chile" width={235} height={50} priority className="h-6 w-auto opacity-90 drop-shadow-[0_2px_8px_rgba(0,0,0,.45)]" />
+            </div>
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={arriba.titulo + arriba.sub}
@@ -713,7 +744,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
                 exit={{ opacity: 0, y: -4, filter: blur ? "blur(4px)" : "blur(0px)" }}
                 transition={{ duration: 0.2 * T, ease: EASE }}
               >
-                <h1 className="reco-texto max-w-[18ch] text-[clamp(1.5rem,7cqw,2.1rem)] font-semibold leading-[1.08] tracking-[-0.03em] text-white [text-wrap:balance]">
+                <h1 className="reco-texto max-w-[24ch] text-[clamp(1.35rem,6.4cqw,2rem)] font-semibold leading-[1.08] tracking-[-0.03em] text-white [text-wrap:balance]">
                   {arriba.titulo}
                 </h1>
                 <p className="reco-texto max-w-[30ch] text-[clamp(0.9rem,3.8cqw,1.05rem)] leading-snug text-white/80 [text-wrap:balance]">{arriba.sub}</p>
@@ -721,27 +752,9 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
             </AnimatePresence>
           </header>
 
-          {/* Abajo: porcentaje mientras se mantiene la posición, tarjeta de vidrio con el resultado, y la barra de vidrio */}
+          {/* Abajo: tarjeta de vidrio con el resultado y el contador de llegadas */}
           <div className="absolute inset-x-0 bottom-0 z-[4] flex flex-col items-center gap-3 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             <AnimatePresence mode="popLayout" initial={false}>
-              {mostrarPorcentaje && (
-                <motion.div
-                  key="porcentaje"
-                  className="flex flex-col items-center pb-1"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6, transition: { duration: 0.15 } }}
-                  transition={{ duration: 0.25 * T, ease: EASE }}
-                >
-                  <p className="reco-texto tabular flex items-baseline text-[clamp(3.6rem,21cqw,5.8rem)] font-semibold leading-none tracking-[-0.05em] text-white">
-                    <Porcentaje progreso={progreso} />
-                    <span className="ml-1 text-[0.42em] font-medium tracking-normal text-white/80">%</span>
-                  </p>
-                  <p className="reco-texto mt-2 text-[clamp(0.9rem,3.8cqw,1.05rem)] font-medium text-white/85">
-                    {fase === "enviando" ? "Verificando…" : "Reconociendo…"}
-                  </p>
-                </motion.div>
-              )}
               {cartaTexto && (
                 <motion.div
                   key={`carta${repetir}`}
@@ -792,22 +805,38 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
               </div>
             )}
 
-            {/* Llegadas de hoy: texto suelto sobre la foto, sin barra */}
+            {/* Llegadas de hoy: una línea discreta de alto fijo (no se mueve al cargar ni al subir el número) */}
             <motion.p
-              className="reco-texto flex items-center gap-2 pb-1 text-[0.95rem] font-medium text-white/80"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ type: "spring", stiffness: 200, damping: 26 }}
+              className="reco-texto flex h-8 items-center gap-1.5 whitespace-nowrap text-[0.95rem] font-medium text-white/80"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: hoyMostrado !== null ? 1 : 0 }}
+              transition={{ duration: 0.4, ease: "easeOut" }}
+              aria-live="polite"
             >
-              {hoyMostrado !== null ? (
-                <>
-                  <Rodillo valor={hoyMostrado} className="text-[1.5rem] font-semibold leading-none tracking-[-0.03em] text-white" />
-                  <span className="whitespace-nowrap">{hoyMostrado === 1 ? "llegada hoy" : "llegadas hoy"}</span>
-                </>
-              ) : (
-                <span className="text-white/60">Llegadas de hoy</span>
-              )}
+              <span>{hoyMostrado === 1 ? "Ya va" : "Ya van"}</span>
+              <Rodillo valor={hoyMostrado ?? 0} className="text-[1.4rem] font-semibold leading-none tracking-[-0.03em] text-white" />
+              <span>hoy</span>
             </motion.p>
+
+            {/* Aviso de luz: discreto, fuera del flujo (no empuja nada), con fundido suave */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+3.2rem)] flex justify-center px-6">
+              <AnimatePresence mode="wait">
+                {avisoLuz && (
+                  <motion.p
+                    key={avisoLuz}
+                    role="status"
+                    className="reco-aviso-luz"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4, transition: { duration: 0.2 } }}
+                    transition={{ duration: 0.3 * T, ease: EASE }}
+                  >
+                    <Sun size={16} strokeWidth={2} aria-hidden />
+                    {avisoLuz === "poca" ? "Hay poca luz, busca un lugar más claro" : "Evita la luz de frente a la cámara"}
+                  </motion.p>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
       </main>

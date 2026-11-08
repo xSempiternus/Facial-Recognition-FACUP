@@ -6,6 +6,7 @@
 // Blanco mientras se alinea, verde FA CUP al quedarse quieto y reconocer, ámbar en aviso, rojo en error.
 // Al sacar la foto, la cara se congela: el marco queda donde estaba la cara en la foto.
 
+import type { MotionValue } from "motion/react";
 import { useEffect, useRef, type RefObject } from "react";
 import { useCalidad } from "./calidad";
 import { copiarRastro, crearRastro, cubrir, type Rastro } from "./rastro";
@@ -39,9 +40,21 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const lim = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 const suave = (k_: number, dt: number) => 1 - Math.exp(-k_ * dt);
 
-type Props = { rastro: RefObject<Rastro>; modo: ModoMarco; guia: Guia; ancho: number; alto: number };
+const mezcla = (a: Rgb, b: Rgb, t: number): Rgb => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 
-export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
+type Props = {
+  rastro: RefObject<Rastro>;
+  modo: ModoMarco;
+  guia: Guia;
+  ancho: number;
+  alto: number;
+  /** 0..1: lo que falta para sacar la foto (el mismo valor que usa el rastreo). Dibuja un arco fino alrededor de la cara. */
+  progreso: MotionValue<number>;
+  /** 0..1: qué tan bien alineada está la cara; el marco pasa de blanco a verde de marca. */
+  alineacion: MotionValue<number>;
+};
+
+export default function Marco({ rastro, modo, guia, ancho, alto, progreso, alineacion }: Props) {
   const lienzo = useRef<HTMLCanvasElement>(null);
   const calidad = useCalidad();
   const datos = useRef({ modo, guia, calidad, ancho, alto });
@@ -76,6 +89,10 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
     const caja = { x: 0, y: 0, w: 0, h: 0, listo: false };
     let ultimo = performance.now();
     let raf = 0;
+    let al = 0; // alineación suavizada
+    let prog = 0; // progreso suavizado (el arco)
+    let arcoA = 0; // opacidad del arco
+    let alfa = 1; // respiración del marco
 
     const esquina = (px: number, py: number, sx: number, sy: number, brazo: number, rad: number) => {
       ctx.moveTo(px, py + sy * brazo);
@@ -131,7 +148,7 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
         tx = (x0 + x1) / 2;
         ty = (y0 + y1) / 2 - h * 0.02;
       } else if (!reducir) {
-        const resp = 1 + 0.02 * Math.sin((ahora / 1000 / T) * 1.15);
+        const resp = 1 + 0.028 * Math.sin((ahora / 1000 / T) * 1.15);
         tw *= resp;
         th *= resp;
       }
@@ -150,6 +167,16 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
       cierre = lerp(cierre, cierreObj, suave(reducir ? 80 : 9, dt));
       const te = (ahora - t0Modo) / 1000 / T; // segundos desde el cambio de modo (ya sin la escala de QA)
       let esc = 1 - 0.07 * cierre;
+      // "Reconociendo…": el marco respira (escala y opacidad suaves); sin nadie, respira más despacio y más tenue.
+      let alfaObj = 1;
+      if (!reducir) {
+        if (m === "verifica") {
+          const f = 0.5 - 0.5 * Math.cos((te * Math.PI * 2) / 1.7);
+          esc *= 1 - 0.022 * f;
+          alfaObj = 1 - 0.3 * f;
+        } else if (m === "busca" && !hay) alfaObj = 0.68 + 0.32 * (0.5 + 0.5 * Math.sin((ahora / 1000 / T) * 1.9));
+      }
+      alfa = lerp(alfa, alfaObj, suave(8, dt));
       if ((m === "exito" || m === "ya") && !reducir) esc -= 0.025 * Math.sin(Math.min(te, 0.6) * Math.PI * (1 / 0.6)) * (1 - Math.min(te / 0.6, 1));
       const bw = caja.w * esc, bh = caja.h * esc;
 
@@ -161,7 +188,8 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
       }
 
       // Color: blanco → verde (con degradado de marca) / ámbar / rojo, con transición.
-      const objC = COLORES[m];
+      al = lerp(al, lim(alineacion.get(), 0, 1), suave(reducir ? 80 : 5, dt));
+      const objC: [Rgb, Rgb] = m === "busca" && hay ? [mezcla(BLANCO, VERDE_A, al * 0.8), mezcla(BLANCO, VERDE_B, al * 0.65)] : COLORES[m];
       const ac = suave(reducir ? 80 : 7, dt);
       for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) color[i][j] = lerp(color[i][j], objC[i][j], ac);
       const x = caja.x - bw / 2 + temblor;
@@ -184,6 +212,7 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
       };
       ctx!.lineCap = "round";
       ctx!.lineJoin = "round";
+      ctx!.globalAlpha = alfa;
       // Sombra fina para que el blanco se lea sobre una cámara muy clara.
       ctx!.strokeStyle = "rgba(0,12,8,.28)";
       ctx!.lineWidth = grosor + 3;
@@ -199,6 +228,35 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
       trazar();
       ctx!.stroke();
       ctx!.shadowBlur = 0;
+
+      // Arco de progreso: se completa mientras se queda quieto (mismo valor que dispara la foto) y se vacía suave si se mueve.
+      const objProg = m === "verifica" ? 1 : m === "busca" || m === "quieto" ? lim(progreso.get(), 0, 1) : 0;
+      prog = lerp(prog, objProg, suave(reducir ? 80 : 16, dt));
+      arcoA = lerp(arcoA, (m === "busca" || m === "quieto" || m === "verifica") && prog > 0.02 ? 1 : 0, suave(7, dt));
+      const rx = bw / 2 - grosor * 1.6, ry = bh / 2 - grosor * 1.6;
+      if (arcoA > 0.01 && rx > 8 && ry > 8) {
+        const a0 = -Math.PI / 2;
+        ctx!.globalAlpha = alfa * arcoA;
+        ctx!.lineCap = "round";
+        if (m !== "verifica") {
+          ctx!.strokeStyle = "rgba(255,255,255,.2)";
+          ctx!.lineWidth = 2;
+          ctx!.beginPath();
+          ctx!.ellipse(caja.x + temblor, caja.y, rx, ry, 0, 0, Math.PI * 2);
+          ctx!.stroke();
+        }
+        if (prog > 0.004) {
+          ctx!.beginPath();
+          ctx!.ellipse(caja.x + temblor, caja.y, rx, ry, 0, a0, a0 + Math.PI * 2 * (prog > 0.995 ? 1 : prog));
+          ctx!.strokeStyle = "rgba(0,12,8,.25)";
+          ctx!.lineWidth = 4.5;
+          ctx!.stroke();
+          ctx!.strokeStyle = gr;
+          ctx!.lineWidth = 2.5;
+          ctx!.stroke();
+        }
+      }
+      ctx!.globalAlpha = 1;
 
       // Éxito: onda de luz desde la cara y pocas chispas (alto/medio). "Ya registrado": una sola onda tenue.
       if ((m === "exito" || m === "ya") && !reducir) {
@@ -243,7 +301,7 @@ export default function Marco({ rastro, modo, guia, ancho, alto }: Props) {
     }
     raf = requestAnimationFrame(cuadro);
     return () => cancelAnimationFrame(raf);
-  }, [rastro]);
+  }, [rastro, progreso, alineacion]);
 
   return <canvas ref={lienzo} aria-hidden className="pointer-events-none absolute inset-0 z-[3] h-full w-full" />;
 }

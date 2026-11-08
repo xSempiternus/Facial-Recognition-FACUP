@@ -6,7 +6,6 @@ import { Camera, Loader2, RotateCcw, SwitchCamera, Upload } from "lucide-react";
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { abrirCamara, contarCamaras, facingInicial, guardarFacing, type Facing } from "@/lib/camara";
 import { reducirImagen } from "@/lib/inscripcion-api";
-import { sonar } from "@/lib/sonidos";
 
 export type Foto = { blob: Blob; url: string; espejo: boolean };
 
@@ -115,7 +114,6 @@ export function FotosPaso({
     setAviso(null);
     try {
       poner(activa, await reducirImagen(v, maxMb), espejo);
-      sonar("captura");
     } catch {
       setAviso("No se pudo tomar la foto. Intenta de nuevo.");
     } finally {
@@ -129,7 +127,6 @@ export function FotosPaso({
     setAviso(null);
     try {
       poner(activa, await reducirImagen(f, maxMb), false);
-      sonar("captura");
     } catch {
       setAviso("No pudimos leer esa imagen. Usa una foto en JPG, PNG o WEBP.");
     } finally {

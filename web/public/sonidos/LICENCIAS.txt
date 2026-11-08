@@ -1,2 +1,4 @@
 Sonidos de la interfaz: Pixabay (Pixabay Content License: uso comercial permitido, sin atribución obligatoria).
 Autores: turning_pages, abhicreates, SoundShelfStudio, Universfield, vadim_makes_sound, mikeaveloo, zenosounds.
+
+rostro.mp3: sintetizado para este proyecto (dos notas suaves, sin licencia de terceros).

@@ -6,16 +6,14 @@ export type Evento =
   | "tap" // toque de un botón
   | "abrir" // sube una hoja o panel
   | "volver" // cerrar / volver
-  | "rostro" // aparece una cara en cámara
-  | "bloqueo" // cara bien alineada, empieza el escaneo
-  | "captura" // se tomó la foto
+  | "rostro" // aparece una cara en cámara (tono sintetizado, suave)
   | "exito" // llegada registrada
   | "ya" // ya estaba registrado
   | "aviso" // no se reconoció, reintentar
   | "error"; // fallo del sistema
 
 const VOLUMEN: Record<Evento, number> = {
-  tap: 0.5, abrir: 0.7, volver: 0.6, rostro: 0.55, bloqueo: 0.8, captura: 0.7, exito: 0.9, ya: 0.7, aviso: 0.7, error: 0.7,
+  tap: 0.5, abrir: 0.7, volver: 0.6, rostro: 0.55, exito: 0.9, ya: 0.7, aviso: 0.7, error: 0.7,
 };
 const EVENTOS = Object.keys(VOLUMEN) as Evento[];
 const CLAVE = "facup-sonido";

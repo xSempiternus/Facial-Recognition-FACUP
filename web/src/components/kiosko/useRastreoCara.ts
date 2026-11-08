@@ -12,9 +12,11 @@ import { calidadActual, type Calidad } from "./calidad";
 import { PUNTOS_REF, type Rastro } from "./rastro";
 
 export type Postura = "sin-cara" | "lejos" | "cerca" | "descentrado" | "quieto";
+/** Hacia dónde está la cara respecto del centro del marco (para decir "sube", "baja", etc.). */
+export type Desvio = "arriba" | "abajo" | "izq" | "der";
 export type Objetivo = { cx: number; cy: number; r: number }; // círculo central, en px de pantalla
 
-const MANTENER_MS = 900; // tiempo quieto en el círculo para sacar la foto
+export const MANTENER_MS = 900; // tiempo quieto en el círculo para sacar la foto
 const PERDER_MS = 350; // si se mueve, el anillo se vacía en este tiempo
 const LADO_MAX_FOTO = 720; // la foto que sube al servidor: lado largo máximo (px)
 const CALIDAD_JPEG = 0.8; // ~50-90 KB a 720 px: suficiente para reconocer y liviano en datos móviles
@@ -43,6 +45,8 @@ type Opciones = {
   espejo?: boolean;
   /** Recibe, en cada análisis, los puntos de referencia y la caja de la cara (normalizados), para dibujarlos. */
   rastro?: RefObject<Rastro>;
+  /** Qué tan alineada está la cara (0..1), cada análisis; el marco cambia de tono con él. */
+  alineacion?: MotionValue<number>;
 };
 
 const URL_MODELO_REMOTO =
@@ -50,11 +54,12 @@ const URL_MODELO_REMOTO =
 const RUTAS_MODELO = ["/models/face_landmarker.task", "/modelos/face-landmarker.task", URL_MODELO_REMOTO];
 
 export function useRastreoCara({
-  video, objetivo, progreso, activo, intento, onCaptura, onCapturando, onCapturaFallida, mantenerAnillo = false, seguimiento, escenario, espejo = true, rastro,
+  video, objetivo, progreso, activo, intento, onCaptura, onCapturando, onCapturaFallida, mantenerAnillo = false, seguimiento, escenario, espejo = true, rastro, alineacion,
 }: Opciones) {
   const [listo, setListo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [postura, setPostura] = useState<Postura>("sin-cara");
+  const [desvio, setDesvio] = useState<Desvio | null>(null);
 
   // Al reintentar (cambia `intento`) se reinicia el estado durante el render, no dentro del efecto.
   const [intentoVisto, setIntentoVisto] = useState(intento);
@@ -141,6 +146,7 @@ export function useRastreoCara({
     let centroPrevio: { x: number; y: number } | null = null;
     let posturaActual: Postura = "sin-cara";
     let hayCara = false;
+    let desvioActual: Desvio | null = null;
     let capturando = false;
 
     const programar = () => {
@@ -235,11 +241,27 @@ export function useRastreoCara({
         const movimiento = centroPrevio ? Math.hypot(centro.x - centroPrevio.x, centro.y - centroPrevio.y) : 0;
         estable = movimiento < r * 0.045 * Math.max(1, dt / 33);
         centroPrevio = centro;
+
+        // Alineación continua (0..1): tamaño adecuado y cercanía al centro. Solo "quieto" llega a 1.
+        const sTam = Math.max(0, Math.min(1, 1 - Math.max(0, Math.abs(alto / r - 1.5) - 0.3) / 0.9));
+        const sCen = Math.max(0, Math.min(1, 1 - Math.max(0, distancia / r - 0.1) / 0.6));
+        alineacion?.set(nueva === "quieto" ? 1 : Math.min(sTam, sCen) * 0.6);
+
+        // Dirección dominante del desvío, con histéresis para que no cambie de un eje a otro por ruido.
+        const ddx = (centro.x - cx) / r, ddy = (centro.y - cy) / r;
+        const eje = desvioActual === "izq" || desvioActual === "der" ? "x" : desvioActual ? "y" : null;
+        const usarX = eje === "x" ? Math.abs(ddx) * 1.25 >= Math.abs(ddy) : eje === "y" ? Math.abs(ddx) > Math.abs(ddy) * 1.25 : Math.abs(ddx) >= Math.abs(ddy);
+        const nuevoDesvio: Desvio = usarX ? (ddx > 0 ? "der" : "izq") : ddy > 0 ? "abajo" : "arriba";
+        if (nuevoDesvio !== desvioActual) {
+          desvioActual = nuevoDesvio;
+          setDesvio(nuevoDesvio);
+        }
         seguimiento?.x.set((centro.x / W - 0.5) * 2);
         seguimiento?.y.set((centro.y / H - 0.5) * 2);
         seguimiento?.presente.set(1);
       } else {
         centroPrevio = null;
+        alineacion?.set(0);
         seguimiento?.presente.set(0);
       }
 
@@ -283,9 +305,9 @@ export function useRastreoCara({
       if (conRVFC) v0.cancelVideoFrameCallback(idCb);
       else cancelAnimationFrame(idCb);
     };
-  }, [listo, video, objetivo, progreso, seguimiento, escenario, rastro]);
+  }, [listo, video, objetivo, progreso, seguimiento, escenario, rastro, alineacion]);
 
-  return { listo, error, postura };
+  return { listo, error, postura, desvio };
 }
 
 // Un solo canvas reutilizado entre capturas (evita reservar memoria de imagen cada vez).

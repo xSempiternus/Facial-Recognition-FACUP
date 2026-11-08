@@ -54,6 +54,27 @@ async function cargar() {
   );
 }
 
+const oyentes = new Set<() => void>();
+export function suscribirSonido(f: () => void) {
+  oyentes.add(f);
+  return () => void oyentes.delete(f);
+}
+export function sonidoSilenciado(): boolean {
+  return typeof window === "undefined" ? false : estaSilenciado();
+}
+/** Enciende o apaga todos los sonidos de la interfaz (se recuerda en este dispositivo). */
+export function fijarSilencio(silencio: boolean) {
+  silenciado = silencio;
+  try {
+    if (silencio) localStorage.setItem(CLAVE, "0");
+    else localStorage.removeItem(CLAVE);
+  } catch {
+    // sin almacenamiento: vale solo para esta sesión
+  }
+  if (!silencio) iniciarSonidos(); // dentro del gesto del toque: crea/reanuda el audio (iOS)
+  oyentes.forEach((f) => f());
+}
+
 /** Llamar dentro de un gesto del usuario (toque/clic). Crea el contexto de audio y precarga los sonidos. */
 export function iniciarSonidos() {
   if (typeof window === "undefined" || estaSilenciado()) return;

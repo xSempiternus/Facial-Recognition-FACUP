@@ -24,6 +24,7 @@ import { desbloquearVoz } from "@/lib/voz";
 import { rutaSede } from "@/lib/sede";
 import { SedeNoExiste, useSede } from "./useSede";
 import { iniciarCalidad } from "@/components/kiosko/calidad";
+import BotonSonido from "@/components/kiosko/BotonSonido";
 import FondoVivo from "@/components/kiosko/FondoVivo";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -79,15 +80,12 @@ function MenuPantalla({ sede, nombreSede }: { sede?: string; nombreSede?: string
   }
 
   function admin() {
-    iniciarSonidos();
-    sonar("abrir");
     if (leerToken()) entrarAlPanel();
     else setFase("clave");
   }
 
   // Salida suave: la pantalla se funde a negro antes de cambiar de ruta.
   function entrarAlPanel() {
-    sonar("exito");
     setFase("saliendo");
     window.setTimeout(() => router.push("/staff"), 380);
   }
@@ -130,6 +128,7 @@ function MenuPantalla({ sede, nombreSede }: { sede?: string; nombreSede?: string
         </div>
 
         <div className="menu-escena">
+          <BotonSonido />
           {/* El logo no se mueve nunca: es el ancla que da continuidad entre el menú y la clave. */}
           <div className="menu-logo">
             <motion.div
@@ -189,7 +188,6 @@ function MenuPantalla({ sede, nombreSede }: { sede?: string; nombreSede?: string
                 key="clave"
                 visible={fase === "clave"}
                 onVolver={() => {
-                  sonar("volver");
                   setFase("menu");
                 }}
                 onCorrecto={entrarAlPanel}
@@ -238,7 +236,6 @@ function HojaClave({
       await iniciarSesion(pin, sede);
       onCorrecto();
     } catch (err) {
-      sonar("error");
       setError(err instanceof ApiError ? err.message : "No se pudo iniciar sesión.");
       setPin("");
       setCargando(false);

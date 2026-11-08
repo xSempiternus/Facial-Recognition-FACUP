@@ -829,9 +829,15 @@ body {
   cursor: pointer;
   transition: background-color 0.2s var(--ease-suave), scale 0.15s var(--ease-suave);
 }
-.reco-voltear {
+/* Esquina superior derecha: sonido siempre; voltear cámara (si hay) queda a su izquierda. */
+.reco-sonido {
   left: auto;
   right: max(0.9rem, env(safe-area-inset-right));
+  opacity: 0.8;
+}
+.reco-voltear {
+  left: auto;
+  right: calc(max(0.9rem, env(safe-area-inset-right)) + 44px + 0.6rem);
   opacity: 0.8;
 }
 .reco-volver:active {

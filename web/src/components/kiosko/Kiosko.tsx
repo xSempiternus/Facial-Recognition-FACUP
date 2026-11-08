@@ -17,6 +17,7 @@ import { desbloquearVoz, hablar, type Frase } from "@/lib/voz";
 import { avisarEntrenador, descartarAviso, llegadasDeHoy, noSoyYo, precalentar, verificar, type TipoAviso, type Verificacion } from "@/lib/api";
 import { calidadActual, iniciarCalidad, restriccionesCamara, useCalidad } from "./calidad";
 import Aurora, { type ModoAurora } from "./Aurora";
+import BotonSonido from "./BotonSonido";
 import Insignia from "./Insignia";
 import { useLuz } from "./luz";
 import Marco, { type Guia, type ModoMarco } from "./Marco";
@@ -786,6 +787,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
               <ChevronLeft size={22} strokeWidth={2.25} aria-hidden />
             </button>
           )}
+          <BotonSonido />
           {varias && !enDemo && !sinCamara && (
             <button
               type="button"

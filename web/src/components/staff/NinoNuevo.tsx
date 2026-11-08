@@ -74,7 +74,7 @@ function ContenidoQrApoderado({ nombre, categoria }: { nombre: string; categoria
 
   return (
     <>
-      <Alerta tono="warn">
+      <Alerta tono="ok">
         <b>{nombre}</b> quedó anotado como invitado con asistencia de hoy.
       </Alerta>
       {error && (
@@ -96,7 +96,7 @@ function ContenidoQrApoderado({ nombre, categoria }: { nombre: string; categoria
       <ol className="s-pasos-txt">
         <li>El apoderado escanea el QR con su celular y completa los datos, la autorización y las fotos.</li>
         <li>
-          Su solicitud llega a <b>Inscripciones</b>. Ahí la apruebas y eliges a <b>{nombre}</b> en «Vincular con invitado» para conservar su asistencia.
+          Su solicitud llega a <b>Niños &gt; Por aprobar</b>. Ahí la apruebas y eliges a <b>{nombre}</b> en «Vincular con invitado» para conservar su asistencia.
         </li>
         <li>
           <Check size={13} aria-hidden style={{ verticalAlign: "-2px" }} /> Si no la aprueban, sigue como invitado y no se reconocerá su cara.

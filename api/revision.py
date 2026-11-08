@@ -10,7 +10,7 @@ conteos) y la captura pasa a /pendientes con `disputa_de`. Al resolver:
     si el staff sabe que sí era, puede marcarlo con /asistencia/manual).
 Si el /verify era 'ya_registrado', no se toca ninguna asistencia: solo la captura pasa a pendientes.
 
-Fallo de reconocimiento: /verify no reconocido NO crea pendiente; entrega un `aviso` (captura en memoria, 3 min,
+Fallo de reconocimiento (rechazado o DUDOSO, ver src/cv_engine.py): /verify no reconocido NO crea pendiente; entrega un `aviso` (captura en memoria, 3 min,
 un solo uso). /verify/aviso tipo=entrenador|abandono -> pendiente 'no_reconocido', tipo=nuevo -> 'nino_nuevo';
 /verify/descartar -> se olvida (reintento). Sin respuesta en 3 min -> pendiente 'no_reconocido' (abandono), por la
 purga perezosa (Sede.vencer_avisos: en /verify*, /pendientes*, /health/detalle y una tarea cada 15 s). Nada de esto
@@ -72,6 +72,10 @@ def _item_pendiente(s: Sede, d: dict) -> dict:
                      if sug else None),
         "disputa_de": ({"id": disp, "nombre": s.jugadores[disp]["nombre"] if disp in s.jugadores else None}
                        if disp else None),
+        # Aditivo: qué tan fuerte es la sugerencia de un fallo del kiosko. 'alto' = superó el umbral automático pero
+        # sin margen contra otro niño; 'medio' = zona gris (entre umbral de duda y automático); 'bajo' = rechazado
+        # con un candidato parecido. None sin sugerido (o pendientes "No soy yo").
+        "parecido": d.get("parecido") if sug else None,
     }
 
 

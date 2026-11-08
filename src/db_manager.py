@@ -20,7 +20,8 @@ _MIGRACIONES = {
                   "consentimiento_tutor": "TEXT", "consentimiento_fecha": "DATETIME",
                   "estado": "TEXT NOT NULL DEFAULT 'activo'"},
     "asistencia": {"origen": "TEXT DEFAULT 'facial'", "estado": "TEXT NOT NULL DEFAULT 'valida'",
-                   "motivo": "TEXT", "anulada_en": "DATETIME"},
+                   "motivo": "TEXT", "anulada_en": "DATETIME",
+                   "similitud": "REAL"},  # similitud del reconocimiento automático (NULL en las demás)
 }
 # Solo las asistencias válidas cuentan en reportes, conteos y "ya registrado".
 VALIDA = "a.estado = 'valida'"
@@ -326,6 +327,9 @@ class Base(FlujosDB):
             if borrado:
                 # Pendientes que apuntaban a él: se conservan, pero sin la referencia.
                 conn.execute("UPDATE pendientes SET sugerido_id = NULL WHERE sugerido_id = ?", (jugador_id,))
+                # El registro de puntajes se conserva (calibración) sin la referencia al jugador borrado.
+                conn.execute("UPDATE verificaciones_log SET mejor_id = NULL WHERE mejor_id = ?", (jugador_id,))
+                conn.execute("UPDATE verificaciones_log SET segundo_id = NULL WHERE segundo_id = ?", (jugador_id,))
         if borrado:
             self.retirar_consentimientos(jugador_id)
             self.limpiar_wal()  # que el WAL no conserve los datos borrados
@@ -343,11 +347,12 @@ class Base(FlujosDB):
             ).fetchone()
         return row["timestamp"] if row else None
 
-    def registrar_asistencia(self, jugador_id: int, origen: str = "facial", timestamp: str | None = None) -> int:
+    def registrar_asistencia(self, jugador_id: int, origen: str = "facial", timestamp: str | None = None,
+                             similitud: float | None = None) -> int:
         with self.conexion() as conn:
             cur = conn.execute(
-                "INSERT INTO asistencia (jugador_id, timestamp, origen) VALUES (?, ?, ?)",
-                (jugador_id, timestamp or _now(), origen),
+                "INSERT INTO asistencia (jugador_id, timestamp, origen, similitud) VALUES (?, ?, ?, ?)",
+                (jugador_id, timestamp or _now(), origen, None if similitud is None else round(float(similitud), 4)),
             )
             return cur.lastrowid
 

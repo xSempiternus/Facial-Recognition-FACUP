@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from pathlib import Path
 
 import cv2
@@ -20,39 +21,91 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 # Facenet512 es un buen equilibrio precisión/velocidad en CPU.
 # Detectores: "opencv" (rápido), "yunet" (rápido y más robusto), "retinaface" (más preciso, más lento).
 # antispoofing: detecta fotos mostradas en un celular/papel (FasNet). Solo se aplica en el kiosko.
-DEFAULTS = {"modelo": "Facenet512", "detector": "opencv", "umbral": None, "antispoofing": False}
+#
+# Veredicto de /verify (el sistema prefiere dudar a equivocarse; cuando duda, decide el staff):
+#   ACEPTADO  (asistencia automática): similitud >= umbral (automático) Y margen contra el segundo JUGADOR distinto
+#             >= MARGEN_MIN;
+#   DUDOSO    : similitud >= umbral_duda pero no se cumple lo anterior (pasa al staff con sugerencia, sin nombre);
+#   RECHAZADO : similitud < umbral_duda.
+# `umbral` = umbral de aceptación automática; `umbral_duda` = umbral de duda (<= umbral).
+# Compatibilidad: una config SIN `umbral_duda` (formato antiguo, p. ej. {"umbral": 0.37}) se interpreta así: el
+# `umbral` antiguo pasa a ser el de duda y el automático es antiguo + UMBRAL_AUTO_OFFSET (0.37 -> duda 0.37,
+# automático 0.42). Los umbrales por defecto de cada modelo (UMBRAL_POR_MODELO) siguen la misma regla.
+DEFAULTS = {"modelo": "Facenet512", "detector": "opencv", "umbral": None, "umbral_duda": None, "antispoofing": False}
 MODELOS = ["Facenet512", "ArcFace", "SFace", "GhostFaceNet", "Facenet", "VGG-Face"]
 # Umbral por defecto de cada modelo (cada uno tiene su propia escala de similitud). Algo más estrictos
 # que los de DeepFace para verificación 1:1, porque aquí se compara contra toda la liga (1:N).
-# Se sobrescriben con MATCH_THRESHOLD, data/config.json o la página de Evaluación.
+# Son umbrales de DUDA (el automático es +UMBRAL_AUTO_OFFSET).
+# Se sobrescriben con MATCH_THRESHOLD (formato antiguo = duda), data/config.json o la página de Evaluación.
 UMBRAL_POR_MODELO = {"Facenet512": 0.70, "ArcFace": 0.45, "SFace": 0.47, "GhostFaceNet": 0.42,
                      "Facenet": 0.62, "VGG-Face": 0.40}
 DETECTORES = ["opencv", "yunet", "retinaface", "mtcnn", "ssd"]
+
+
+def _float_env(nombre: str, defecto: float) -> float:
+    try:
+        return float(os.getenv(nombre, defecto))
+    except ValueError:
+        return defecto
+
+
+# Distancia entre el umbral de duda y el automático cuando la config no trae `umbral_duda` (env UMBRAL_AUTO_OFFSET).
+UMBRAL_AUTO_OFFSET = _float_env("UMBRAL_AUTO_OFFSET", 0.05)
+# Margen mínimo entre el mejor jugador y el segundo mejor jugador DISTINTO para aceptar solo (env MARGEN_MIN).
+# Con GhostFaceNet+retinaface el impostor más parecido llegó a 0.336 y el genuino p5 a 0.435 (margen ~0.03-0.1).
+MARGEN_MIN = _float_env("MARGEN_MIN", 0.04)
+RESULTADOS = ("aceptado", "dudoso", "rechazado")
 
 
 def load_config(ruta: Path | None = None) -> dict:
     ruta = Path(ruta) if ruta else CONFIG_PATH
     cfg = dict(DEFAULTS)
     env = {"modelo": os.getenv("FACE_MODEL"), "detector": os.getenv("FACE_DETECTOR"),
-           "umbral": os.getenv("MATCH_THRESHOLD")}
+           "umbral": os.getenv("MATCH_THRESHOLD"), "umbral_duda": os.getenv("MATCH_THRESHOLD_DUDA")}
     cfg.update({k: v for k, v in env.items() if v})
     if ruta.exists():
         try:
-            cfg.update(json.loads(ruta.read_text(encoding="utf-8")))
+            archivo = json.loads(ruta.read_text(encoding="utf-8"))
+            if isinstance(archivo, dict):
+                if "umbral" in archivo and "umbral_duda" not in archivo:
+                    cfg["umbral_duda"] = None  # formato antiguo: su `umbral` es el de duda
+                cfg.update(archivo)
         except (ValueError, OSError):
             pass
-    if cfg["umbral"] is None:
-        cfg["umbral"] = UMBRAL_POR_MODELO.get(cfg["modelo"], 0.6)
-    cfg["umbral"] = float(cfg["umbral"])
+    return normalizar_umbrales(cfg)
+
+
+def normalizar_umbrales(cfg: dict) -> dict:
+    """Completa `umbral` (automático) y `umbral_duda` según la regla de compatibilidad. Modifica y retorna cfg."""
+    if cfg.get("umbral_duda") is None:
+        base = cfg.get("umbral")
+        base = UMBRAL_POR_MODELO.get(cfg["modelo"], 0.6) if base is None else float(base)
+        cfg["umbral_duda"], cfg["umbral"] = base, base + UMBRAL_AUTO_OFFSET
+    elif cfg.get("umbral") is None:
+        cfg["umbral"] = float(cfg["umbral_duda"]) + UMBRAL_AUTO_OFFSET
+    cfg["umbral"] = round(float(cfg["umbral"]), 3)
+    cfg["umbral_duda"] = round(min(float(cfg["umbral_duda"]), cfg["umbral"]), 3)
     return cfg
+
+
+def decidir(mejor: float | None, segundo: float | None, umbral_auto: float, umbral_duda: float,
+            margen_min: float = MARGEN_MIN) -> str:
+    """'aceptado' | 'dudoso' | 'rechazado'. `segundo`: puntaje del segundo mejor JUGADOR distinto (None si no hay)."""
+    if mejor is None or mejor < umbral_duda:
+        return "rechazado"
+    margen = mejor - segundo if segundo is not None else float("inf")
+    if mejor >= umbral_auto and margen >= margen_min - 1e-9:  # tolerancia de redondeo float
+        return "aceptado"
+    return "dudoso"
 
 
 config = load_config()
 
 
 def set_config(modelo: str, detector: str, umbral: float, antispoofing: bool | None = None,
-               cfg: dict | None = None, ruta: Path | None = None) -> dict:
-    """Cambia la configuración `cfg` (por defecto la global) en caliente, la persiste en `ruta` y precarga el modelo."""
+               cfg: dict | None = None, ruta: Path | None = None, umbral_duda: float | None = None) -> dict:
+    """Cambia la configuración `cfg` (por defecto la global) en caliente, la persiste en `ruta` y precarga el modelo.
+    `umbral` = automático. `umbral_duda` None: conserva el actual si sigue siendo <= umbral; si no, umbral - offset."""
     cfg = config if cfg is None else cfg
     ruta = Path(ruta) if ruta else CONFIG_PATH
     if modelo not in MODELOS:
@@ -61,10 +114,17 @@ def set_config(modelo: str, detector: str, umbral: float, antispoofing: bool | N
         raise ValueError(f"Detector no soportado: {detector}")
     if not 0 < umbral < 1:
         raise ValueError("El umbral debe estar entre 0 y 1.")
+    if umbral_duda is None:
+        actual = cfg.get("umbral_duda")
+        umbral_duda = actual if actual is not None and actual <= umbral else max(0.001, umbral - UMBRAL_AUTO_OFFSET)
+    if not 0 < umbral_duda < 1:
+        raise ValueError("El umbral de duda debe estar entre 0 y 1.")
+    if round(float(umbral_duda), 3) > round(float(umbral), 3):
+        raise ValueError("El umbral de duda no puede ser mayor que el umbral automático.")
     if antispoofing is None:
         antispoofing = cfg.get("antispoofing", False)
     nuevo = {"modelo": modelo, "detector": detector, "umbral": round(float(umbral), 3),
-             "antispoofing": bool(antispoofing)}
+             "umbral_duda": round(float(umbral_duda), 3), "antispoofing": bool(antispoofing)}
     DeepFace.build_model(modelo)  # falla antes de guardar si el modelo no carga
     DeepFace.build_model(detector, task="face_detector")
     if nuevo["antispoofing"]:
@@ -115,7 +175,9 @@ def _analizar_rapido(img: np.ndarray, miniatura: bool, cfg: dict) -> dict:
     chica = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) if k < 1 else img
     import retinaface.RetinaFace as rf
     modelo_rf = _modeling.build_model(task="face_detector", model_name="retinaface").model
+    t0 = time.perf_counter()
     caras = rf.detect_faces(chica, model=modelo_rf, threshold=0.9, allow_upscaling=False)
+    ms_deteccion = round((time.perf_counter() - t0) * 1000)
     if not isinstance(caras, dict) or not caras:
         raise FaceNotFoundError("No se detectó ningún rostro en la imagen.")
     c = max(caras.values(), key=lambda o: (o["facial_area"][2] - o["facial_area"][0])
@@ -138,7 +200,8 @@ def _analizar_rapido(img: np.ndarray, miniatura: bool, cfg: dict) -> dict:
                              detector_backend="skip", enforce_detection=False, align=False)[0]["embedding"]
     a = cara.facial_area
     resultado = {"embedding": [float(x) for x in emb], "num_rostros": len(caras),
-                 "confianza": float(c["score"]), "tamano_rostro": a.w / ancho, "rapido": True}
+                 "confianza": float(c["score"]), "tamano_rostro": a.w / ancho, "rapido": True,
+                 "ms_deteccion": ms_deteccion}
     if miniatura:
         resultado["miniatura"] = _miniatura(img, {"x": a.x, "y": a.y, "w": a.w, "h": a.h})
     return resultado

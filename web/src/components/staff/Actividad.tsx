@@ -6,19 +6,59 @@ import { History } from "lucide-react";
 import { api, fechaHora } from "@/lib/staff-api";
 import { Alerta, Button, SkeletonRows, Vacio, useQuery } from "./ui";
 
-const ACCIONES: Record<string, string> = {
-  crear_invitado: "Niño nuevo anotado como invitado",
-  anular_asistencia: "Asistencia anulada",
-  editar_jugador: "Jugador editado",
-  aprobar_solicitud: "Solicitud aprobada",
-  rechazar_solicitud: "Solicitud rechazada",
-  solicitud_recibida: "Solicitud recibida de una familia",
-  resolver_disputa: "Disputa resuelta",
-  no_soy_yo: "Un niño marcó «no soy yo»",
-  borrar_jugador: "Jugador eliminado",
-};
+const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
-const legible = (a: string) => ACCIONES[a] ?? a.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+/** "2026-11-09 18:00:00" -> "9 nov" (sin hora ni ceros). */
+function diaCorto(iso: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? `${Number(m[3])} ${MESES[Number(m[2]) - 1] ?? ""}`.trim() : null;
+}
+
+/** Traduce acción + detalle internos (con ids) a una frase para el staff. Sin ids visibles. */
+function frase(accion: string, detalle: string): string {
+  const d = detalle ?? "";
+  switch (accion) {
+    case "crear_invitado":
+      if (d.includes("desde pendiente")) return "Un niño no reconocido se anotó como invitado";
+      if (d.includes("manual")) return "Se marcó asistencia a mano a un niño nuevo (invitado)";
+      return "Niño nuevo anotado como invitado";
+    case "crear_enlace": {
+      const dia = diaCorto(/vence=(\S+)/.exec(d)?.[1] ?? "");
+      return `Se creó un enlace para padres${dia ? ` (vence el ${dia})` : ""}`;
+    }
+    case "revocar_enlace":
+      return "Se desactivó un enlace para padres";
+    case "solicitud_recibida":
+      return "Una familia envió una inscripción";
+    case "aprobar_solicitud":
+      return d.includes("invitado convertido") ? "Se aprobó una inscripción (era invitado: conserva su asistencia)" : "Se aprobó una inscripción";
+    case "rechazar_solicitud": {
+      const motivo = d.includes(":") ? d.slice(d.indexOf(":") + 1).trim() : "";
+      return `Se rechazó una inscripción${motivo ? ` (${motivo})` : ""}`;
+    }
+    case "anular_asistencia": {
+      const motivo = d.includes(":") ? d.slice(d.indexOf(":") + 1).trim() : "";
+      return `Se anuló una asistencia${motivo ? ` (${motivo})` : ""}`;
+    }
+    case "editar_jugador": {
+      const campos = (d.split(":")[1] ?? "").split(",").map((c) => c.trim());
+      const que = [campos.includes("nombre") && "el nombre", campos.includes("categoria") && "la categoría"].filter(Boolean).join(" y ");
+      return que ? `Se cambió ${que} de un niño` : "Se editaron los datos de un niño";
+    }
+    case "resolver_disputa":
+      if (d.endsWith("confirmada")) return "Se revisó una duda de reconocimiento: asistencia confirmada";
+      if (d.endsWith("anulada")) return "Se revisó una duda de reconocimiento: asistencia anulada";
+      return "Se revisó una duda de reconocimiento";
+    case "no_soy_yo":
+      return "Un niño marcó «no soy yo» en el kiosko";
+    case "borrar_jugador":
+      return "Se eliminó a un niño de la sede";
+    case "aviso_kiosko":
+      return d === "entrenador" ? "El kiosko pidió ayuda al entrenador" : d === "nuevo" ? "Un niño nuevo avisó en el kiosko" : d === "abandono" ? "Un aviso del kiosko venció sin respuesta" : "Aviso desde el kiosko";
+    default:
+      return accion.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+  }
+}
 
 export function Actividad() {
   const q = useQuery(api.auditoria);
@@ -51,8 +91,7 @@ export function Actividad() {
             <li key={a.id}>
               <time dateTime={a.fecha}>{fechaHora(a.fecha)}</time>
               <span>
-                <b>{legible(a.accion)}</b>
-                {a.detalle && <span className="muted"> · {a.detalle}</span>}
+                <b>{frase(a.accion, a.detalle ?? "")}</b>
               </span>
             </li>
           ))}

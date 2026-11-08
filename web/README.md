@@ -44,6 +44,16 @@ Parámetros de la URL:
 - `?voz=0` apaga el saludo hablado.
 - `?prueba=1` deja el resultado en pantalla hasta tocarla (para revisar con el staff).
 
+## PWA (instalable y rápida)
+
+- Manifest: `public/manifest.webmanifest` (íconos en `public/iconos/`). Service worker: `public/sw.js`, registrado desde `src/lib/pwa.ts` (solo en producción; en desarrollo con `?sw=1`).
+- Caché: modelo y WASM de MediaPipe precacheados; `/_next/static`, sonidos e íconos desde caché; páginas públicas red primero con copia de respaldo y `public/offline.html` sin red. Nunca se cachea `/api/**`, `/staff/**` ni nada que no sea GET.
+- Instalar: Android/Chrome, Staff > Ajustes > «Instalar en este dispositivo» (o menú ⋮ > Instalar app). iPhone/iPad, en Safari: Compartir > Agregar a pantalla de inicio. Requiere HTTPS (el túnel lo da).
+- Actualizar: tras `npm run build` y reiniciar, el SW nuevo se activa solo y la app lo usa en la siguiente apertura/navegación. Si cambias `public/sw.js` o la lista de precaché, sube `VERSION` dentro del archivo.
+- La URL del túnel cambia en cada arranque: cada URL es un origen nuevo, así que la app instalada y la caché se vuelven a crear (hay que reinstalar el ícono).
+- Límites en iOS: el permiso de cámara puede pedirse de nuevo al abrir la app instalada, y iOS puede borrar los datos/caché del sitio si no se usa por un tiempo.
+- La pantalla se mantiene encendida mientras el kiosko está abierto (Screen Wake Lock; sin soporte, se ignora).
+
 ## Archivos
 
 ```

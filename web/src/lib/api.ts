@@ -4,7 +4,7 @@ import { cabeceraSede } from "@/lib/sede";
 
 export type Verificacion =
   | { ok: true; nombre: string; categoria: string | null; yaRegistrado: boolean; registradoALas: string | null; similitud?: number; reporte?: string }
-  | { ok: false; codigo: string; mensaje: string; similitud?: number; aviso?: string }; // aviso: referencia de un "no reconocido" (backend nuevo)
+  | { ok: false; codigo: string; mensaje: string; similitud?: number; aviso?: string; dudoso?: boolean }; // aviso: referencia de un "no reconocido" (backend nuevo); dudoso: se parece a alguien pero no con certeza (lo confirma el staff)
 
 const TIEMPO_MAX_MS = 18_000; // por intento (datos móviles lentos)
 const INTENTOS = 2; // un reintento ante corte de red / timeout / 502-504
@@ -70,6 +70,7 @@ export async function verificar(foto: Blob, señal?: AbortSignal, alReintentar?:
     mensaje: detalle.mensaje ?? `Error del servidor (${resp.status}).`,
     similitud: detalle.similitud,
     aviso: typeof detalle.aviso === "string" && detalle.aviso ? detalle.aviso : undefined,
+    dudoso: detalle.dudoso === true ? true : undefined,
   };
 }
 

@@ -1,11 +1,12 @@
 "use client";
 
-import { CircleHelp, Download, FlaskConical, Save, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { CircleHelp, Download, FlaskConical, Save, Share, ShieldCheck, Smartphone } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Actividad } from "@/components/staff/Actividad";
 import { Categorias } from "@/components/staff/Categorias";
 import { reiniciarTours } from "@/components/staff/Tour";
 import { Alerta, Badge, Button, Campo, Dialogo, ErrorCarga, PageHeader, SkeletonRows, Vacio, useQuery, useToast } from "@/components/staff/ui";
+import { estaInstalada, esIOS, type EventoInstalar } from "@/lib/pwa";
 import { ApiError, api, descargarRespaldo, textoError, type Config } from "@/lib/staff-api";
 
 function VerGuias() {
@@ -29,6 +30,69 @@ function VerGuias() {
   );
 }
 
+function InstalarApp() {
+  const [evento, setEvento] = useState<EventoInstalar | null>(null);
+  const [estado, setEstado] = useState<"cargando" | "instalada" | "ios" | "otro">("cargando");
+  useEffect(() => {
+    const t = setTimeout(() => setEstado(estaInstalada() ? "instalada" : esIOS() ? "ios" : "otro"), 0);
+    const antes = (e: Event) => {
+      e.preventDefault();
+      setEvento(e as EventoInstalar);
+    };
+    const listo = () => setEstado("instalada");
+    window.addEventListener("beforeinstallprompt", antes);
+    window.addEventListener("appinstalled", listo);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("beforeinstallprompt", antes);
+      window.removeEventListener("appinstalled", listo);
+    };
+  }, []);
+  async function instalar() {
+    if (!evento) return;
+    try {
+      await evento.prompt();
+      await evento.userChoice;
+    } catch {
+      /* el usuario cerró el aviso */
+    }
+    setEvento(null);
+  }
+  return (
+    <section className="s-card" aria-labelledby="inst">
+      <div className="s-card-h">
+        <h2 id="inst" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <Smartphone size={15} aria-hidden /> Instalar en este dispositivo
+        </h2>
+      </div>
+      <div className="s-card-b" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {estado === "instalada" ? (
+          <p style={{ margin: 0 }}>Listo: la app ya está instalada en este dispositivo.</p>
+        ) : evento ? (
+          <>
+            <p className="muted" style={{ margin: 0 }}>Instálala para abrirla como una app, a pantalla completa y más rápido.</p>
+            <div>
+              <Button sm onClick={instalar}>
+                <Download size={14} aria-hidden /> Instalar
+              </Button>
+            </div>
+          </>
+        ) : estado === "ios" ? (
+          <p style={{ margin: 0 }}>
+            En el iPhone o iPad abre esta página en Safari, toca <Share size={14} aria-hidden style={{ verticalAlign: "-2px" }} /> <strong>Compartir</strong> y
+            luego <strong>Agregar a pantalla de inicio</strong>.
+          </p>
+        ) : estado === "otro" ? (
+          <p className="muted" style={{ margin: 0 }}>
+            En Android abre el menú del navegador (⋮) y elige <strong>Instalar app</strong> o <strong>Agregar a pantalla de inicio</strong>. Si no aparece, revisa que estés en Chrome y con
+            la dirección segura (https).
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 export default function Ajustes() {
   const cfg = useQuery(api.config);
   const resp = useQuery(api.respaldos);
@@ -46,6 +110,7 @@ export default function Ajustes() {
       <Categorias />
       <Respaldos query={resp} />
       <Actividad />
+      <InstalarApp />
 
       <section className="s-card" aria-labelledby="priv">
         <div className="s-card-h">

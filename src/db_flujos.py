@@ -24,6 +24,14 @@ ESTADOS_ASISTENCIA = ("valida", "disputada", "anulada")
 # no_soy_yo: el kiosko reconoció a otro niño.
 MOTIVOS_PENDIENTE = ("no_reconocido", "no_soy_yo", "nino_nuevo")
 MAX_NOVEDADES = 20
+# Registro de puntajes de /verify (calibración): retención 90 días.
+RETENCION_VERIFICACIONES_DIAS = 90
+RESULTADOS_VERIFICACION = ("aceptado", "dudoso", "rechazado", "sin_cara", "error")
+# Parecido de la sugerencia de un pendiente que viene de un fallo del kiosko: alto (dudoso por margen),
+# medio (zona gris entre umbral_duda y el automático), bajo (rechazado, pero con un candidato sugerible).
+PARECIDOS = ("alto", "medio", "bajo")
+# Columnas agregadas a tablas de este módulo después de su primera versión.
+_MIGRACIONES_FLUJOS = {"pendientes": {"parecido": "TEXT"}}
 _SIN_CAMBIO = object()
 _ALFABETO_CODIGO = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
@@ -95,6 +103,25 @@ _ESQUEMA = [
         asistencia_id INTEGER
     )
     """,
+    # Registro de puntajes de /verify para calibrar umbrales: sin biometría ni fotos (solo ids y números).
+    """
+    CREATE TABLE IF NOT EXISTS verificaciones_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts DATETIME NOT NULL,
+        resultado TEXT NOT NULL,
+        mejor_id INTEGER,
+        mejor_score REAL,
+        segundo_id INTEGER,
+        segundo_score REAL,
+        umbral_auto REAL,
+        umbral_duda REAL,
+        modelo TEXT,
+        detector TEXT,
+        ms_total INTEGER,
+        ms_deteccion INTEGER
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_verificaciones_ts ON verificaciones_log (ts)",
     """
     CREATE TABLE IF NOT EXISTS staff_tours (
         tour_id TEXT PRIMARY KEY,
@@ -118,6 +145,11 @@ def crear_esquema(conn) -> None:
     """Idempotente: tablas nuevas sobre BDs existentes."""
     for sql in _ESQUEMA:
         conn.execute(sql)
+    for tabla, columnas in _MIGRACIONES_FLUJOS.items():
+        existentes = {r[1] for r in conn.execute(f"PRAGMA table_info({tabla})")}
+        for col, tipo in columnas.items():
+            if col not in existentes:
+                conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {tipo}")
     if conn.execute("SELECT 1 FROM meta WHERE clave = 'ip_sal'").fetchone() is None:
         conn.execute("INSERT INTO meta (clave, valor) VALUES ('ip_sal', ?)", (secrets.token_hex(16),))
 
@@ -308,15 +340,18 @@ class FlujosDB:
 
     def crear_pendiente(self, timestamp: str, embedding: list[float], modelo: str, miniatura: bytes,
                         sugerido_id: int | None, similitud: float | None, motivo: str = "no_reconocido",
-                        disputa_de: int | None = None, asistencia_id: int | None = None) -> int:
+                        disputa_de: int | None = None, asistencia_id: int | None = None,
+                        parecido: str | None = None) -> int:
         if motivo not in MOTIVOS_PENDIENTE:
             raise ValueError(f"motivo de pendiente inválido: {motivo}")
+        if parecido is not None and parecido not in PARECIDOS:
+            raise ValueError(f"parecido inválido: {parecido}")
         with self.conexion() as conn:
             cur = conn.execute(
                 "INSERT INTO pendientes (timestamp, embedding, modelo, miniatura, sugerido_id, similitud, motivo, "
-                "disputa_de_jugador_id, asistencia_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "disputa_de_jugador_id, asistencia_id, parecido) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (timestamp, json.dumps(embedding), modelo, miniatura, sugerido_id, similitud, motivo,
-                 disputa_de, asistencia_id))
+                 disputa_de, asistencia_id, parecido))
             pid = cur.lastrowid
         self.purgar_pendientes()
         return pid
@@ -329,7 +364,7 @@ class FlujosDB:
         with self.conexion() as conn:
             rows = conn.execute(
                 "SELECT id, timestamp, modelo, miniatura, sugerido_id, similitud, motivo, disputa_de_jugador_id, "
-                "asistencia_id FROM pendientes ORDER BY id DESC").fetchall()
+                "asistencia_id, parecido FROM pendientes ORDER BY id DESC").fetchall()
         return [dict(r) for r in rows]
 
     def novedades_pendientes(self, desde: int, limite: int = MAX_NOVEDADES) -> dict:
@@ -338,7 +373,7 @@ class FlujosDB:
         with self.conexion() as conn:
             total, max_id = conn.execute("SELECT COUNT(*), coalesce(MAX(id), 0) FROM pendientes").fetchone()
             rows = conn.execute(
-                "SELECT id, timestamp, motivo, miniatura, sugerido_id, similitud, disputa_de_jugador_id "
+                "SELECT id, timestamp, motivo, miniatura, sugerido_id, similitud, disputa_de_jugador_id, parecido "
                 "FROM pendientes WHERE id > ? ORDER BY id DESC LIMIT ?", (desde, limite)).fetchall() if max_id > desde else []
         return {"ultimo_id": max(desde, max_id), "total": total, "nuevos": [dict(r) for r in rows]}
 
@@ -381,6 +416,40 @@ class FlujosDB:
         if viejos:
             self.limpiar_wal()
         return len(viejos)
+
+    # ------------------------------------------------------------ registro de puntajes de /verify (calibración)
+
+    def registrar_verificacion(self, resultado: str, mejor_id: int | None = None, mejor_score: float | None = None,
+                               segundo_id: int | None = None, segundo_score: float | None = None,
+                               umbral_auto: float | None = None, umbral_duda: float | None = None,
+                               modelo: str | None = None, detector: str | None = None,
+                               ms_total: int | None = None, ms_deteccion: int | None = None) -> None:
+        """Una fila por /verify (sin biometría ni fotos). Retención RETENCION_VERIFICACIONES_DIAS (purga perezosa)."""
+        if resultado not in RESULTADOS_VERIFICACION:
+            raise ValueError(f"resultado inválido: {resultado}")
+
+        def r4(x):
+            return None if x is None else round(float(x), 4)
+        with self.conexion() as conn:
+            conn.execute(
+                "INSERT INTO verificaciones_log (ts, resultado, mejor_id, mejor_score, segundo_id, segundo_score, "
+                "umbral_auto, umbral_duda, modelo, detector, ms_total, ms_deteccion) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (_now(), resultado, mejor_id, r4(mejor_score), segundo_id, r4(segundo_score), r4(umbral_auto),
+                 r4(umbral_duda), modelo, detector, ms_total, ms_deteccion))
+
+    def verificaciones_desde(self, dias: int) -> list[dict]:
+        """Filas de los últimos `dias` días (resultado, puntajes), para /metricas/reconocimiento."""
+        with self.conexion() as conn:
+            rows = conn.execute(
+                "SELECT ts, resultado, mejor_score, segundo_score, ms_total FROM verificaciones_log "
+                "WHERE ts >= ? ORDER BY id", (_hace(dias),)).fetchall()
+        return [dict(r) for r in rows]
+
+    def purgar_verificaciones(self) -> int:
+        with self.conexion() as conn:
+            return conn.execute("DELETE FROM verificaciones_log WHERE ts < ?",
+                                (_hace(RETENCION_VERIFICACIONES_DIAS),)).rowcount
 
     # ------------------------------------------------------------ preferencias del staff (tours vistos)
 

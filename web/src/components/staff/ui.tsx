@@ -191,10 +191,10 @@ export function ErrorCarga({ error, reintentar }: { error: ApiError; reintentar:
   );
 }
 
-export function Alerta({ tono = "warn", children }: { tono?: "warn" | "err"; children: ReactNode }) {
+export function Alerta({ tono = "warn", children }: { tono?: "warn" | "err" | "ok"; children: ReactNode }) {
   return (
     <div className={cn("s-alert", tono)} role={tono === "err" ? "alert" : undefined}>
-      <CircleAlert size={16} aria-hidden />
+      {tono === "ok" ? <CircleCheck size={16} aria-hidden /> : <CircleAlert size={16} aria-hidden />}
       <div>{children}</div>
     </div>
   );

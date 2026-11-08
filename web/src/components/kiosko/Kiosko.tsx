@@ -13,6 +13,7 @@ import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { abrirCamara, contarCamaras, facingInicial, guardarFacing, type Facing } from "@/lib/camara";
 import { iniciarSonidos, sonar } from "@/lib/sonidos";
+import { usePantallaActiva } from "@/lib/pantalla-activa";
 import { desbloquearVoz, hablar, type Frase } from "@/lib/voz";
 import { avisarEntrenador, descartarAviso, llegadasDeHoy, noSoyYo, precalentar, verificar, type TipoAviso, type Verificacion } from "@/lib/api";
 import { calidadActual, iniciarCalidad, restriccionesCamara, useCalidad } from "./calidad";
@@ -131,6 +132,8 @@ function aResultado(v: Verificacion): { resultado: Resultado; frase: Frase | nul
     case "foto_falsa":
       return { resultado: { tono: "aviso", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara" }, frase: { texto: "Usa tu cara, no una foto.", tipo: "foto" } };
     case "no_reconocido":
+      // Dudoso: se parece a alguien pero no con certeza. Nunca "No te reconocimos" ni nombre; sin voz (no hay frase propia).
+      if (v.dudoso) return { resultado: { tono: "aviso", noReconocido: true, aviso: v.aviso, titulo: "Un entrenador lo confirmará", sub: "Avisa a tu entrenador o intenta de nuevo" }, frase: null };
       return { resultado: { tono: "aviso", noReconocido: true, aviso: v.aviso, titulo: "No te reconocimos", sub: v.aviso ? "Puedes intentarlo otra vez o pedir ayuda" : "Intenta de nuevo o avisa a tu entrenador" }, frase: { texto: "No te reconocimos. Intenta de nuevo o avisa a tu entrenador.", tipo: "no_reconocido" } };
     case "sin_conexion":
       return { resultado: { tono: "aviso", titulo: "Sin conexión", sub: "Revisa tu internet e intenta de nuevo" }, frase: null };
@@ -173,6 +176,7 @@ const DEMO_CAJA = { x0: 95, y0: 255, x1: 290, y1: 482 };
 const DEMO_SIN_CARA = new Set(["buscando", "error", "camara", "denegada"]);
 
 export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
+  usePantallaActiva(true); // la pantalla no se apaga mientras el kiosko esté abierto
   const demo = useDemo();
   const enDemo = demo !== "";
   const video = useRef<HTMLVideoElement>(null);

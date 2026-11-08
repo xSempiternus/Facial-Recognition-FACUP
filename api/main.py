@@ -12,10 +12,11 @@ api/revision.py (pendientes, "No soy yo", invitados, anulaciones, auditoría), a
 import asyncio
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 
-from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -23,6 +24,7 @@ from pydantic import BaseModel
 
 from api import auth, nucleo
 from api.inscripcion import router as inscripcion_router
+from api.metricas import router as metricas_router
 from api.nucleo import (Sede, analizar as _analyze, error as _error, log, obtener_sede as _obtener_sede,
                         precalentar_nombre, sede_publica, sede_staff)
 from api.revision import router as revision_router
@@ -34,7 +36,9 @@ MIN_FACE_SIZE = 0.15
 MAX_FOTOS_INSCRIPCION = 5
 # Tolerancia al comparar entre sí las fotos de una misma inscripción (los ángulos laterales se parecen menos).
 TOLERANCIA_INSCRIPCION = 0.10
-# El resultado del camino rápido de retinaface solo se acepta si supera el umbral por al menos este margen.
+# El resultado del camino rápido de retinaface solo se acepta si es ACEPTADO y supera el umbral AUTOMÁTICO por al
+# menos este margen; dudosos, rechazados y aceptados justos se re-verifican con el camino de referencia.
+# Reglas del veredicto (umbral automático, umbral de duda, MARGEN_MIN): ver src/cv_engine.py.
 MARGEN_VERIFICACION_RAPIDA = 0.05
 # Exigir la autorización firmada del tutor para inscribir (datos biométricos de menores).
 REQUIERE_CONSENTIMIENTO = os.getenv("REQUIRE_CONSENT", "1") != "0"
@@ -66,6 +70,7 @@ async def _respaldo_diario():
                     # Retenciones (solicitudes 30 días, pendientes 7 días) aunque nadie abra la app.
                     await run_in_threadpool(base.purgar_solicitudes)
                     await run_in_threadpool(base.purgar_pendientes)
+                    await run_in_threadpool(base.purgar_verificaciones)  # registro de puntajes: 90 días
                     if not base.respaldo_de_hoy_existe():
                         await run_in_threadpool(base.crear_respaldo, "auto")
             except Exception as exc:  # un fallo de respaldo no debe tumbar la API
@@ -133,6 +138,7 @@ app = FastAPI(
 app.include_router(voz_router)
 app.include_router(inscripcion_router)
 app.include_router(revision_router)
+app.include_router(metricas_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -161,7 +167,9 @@ def health_detalle(s: Sede = Depends(sede_staff)):
         "requieren_reinscripcion": len(s.jugadores) - compatibles,
         "pendientes": s.db.contar_pendientes(),
         "solicitudes": s.db.contar_solicitudes(),
-        "threshold": s.umbral(),
+        "threshold": s.umbral_auto(),
+        "threshold_duda": s.umbral_duda(),
+        "margen_min": cv_engine.MARGEN_MIN,
         "modelo": s.config["modelo"],
         "detector": s.config["detector"],
         "antispoofing": s.config.get("antispoofing", False),
@@ -171,7 +179,8 @@ def health_detalle(s: Sede = Depends(sede_staff)):
 class ConfigIn(BaseModel):
     modelo: str
     detector: str
-    umbral: float
+    umbral: float  # aceptación automática
+    umbral_duda: float | None = None  # opcional: si falta se conserva el actual (o umbral - UMBRAL_AUTO_OFFSET)
     antispoofing: bool | None = None
 
 
@@ -203,18 +212,22 @@ def kiosko_resumen(s: Sede = Depends(sede_publica)):
 
 @app.get("/config")
 def get_config(s: Sede = Depends(sede_staff)):
-    return {**s.config, "modelos": cv_engine.MODELOS, "detectores": cv_engine.DETECTORES}
+    """`umbral` = aceptación automática; `umbral_duda` = desde ahí la captura es dudosa (pasa al staff);
+    `margen_min` = margen mínimo contra el segundo jugador distinto (solo lectura, por entorno)."""
+    return {**s.config, "margen_min": cv_engine.MARGEN_MIN, "modelos": cv_engine.MODELOS,
+            "detectores": cv_engine.DETECTORES}
 
 
 @app.put("/config")
 async def put_config(cfg: ConfigIn, s: Sede = Depends(sede_staff)):
     try:
         nuevo = await run_in_threadpool(cv_engine.set_config, cfg.modelo, cfg.detector, cfg.umbral,
-                                        cfg.antispoofing, s.config, s.ruta_config)
+                                        cfg.antispoofing, s.config, s.ruta_config, cfg.umbral_duda)
     except ValueError as exc:
         _error(400, "config_invalida", str(exc))
     # Los pendientes persisten: al asignarlos, una foto de otro modelo solo registra la asistencia (no se aprende).
-    return {**nuevo, "requieren_reinscripcion": len(s.jugadores) - len(s.plantillas_actuales())}
+    return {**nuevo, "margen_min": cv_engine.MARGEN_MIN,
+            "requieren_reinscripcion": len(s.jugadores) - len(s.plantillas_actuales())}
 
 
 # ---------------------------------------------------------------- categorías (staff, por sede)
@@ -344,32 +357,69 @@ async def enroll(
     }
 
 
+def _log_verificacion(s: Sede, resultado: str, t0: float, mejor_id: int | None = None,
+                      mejor_score: float | None = None, segundo_id: int | None = None,
+                      segundo_score: float | None = None, ms_deteccion: int | None = None) -> None:
+    """Registro de puntajes para calibrar (sin biometría). Un fallo del registro nunca rompe /verify."""
+    try:
+        s.db.registrar_verificacion(resultado, mejor_id, mejor_score, segundo_id, segundo_score,
+                                    s.umbral_auto(), s.umbral_duda(), s.config["modelo"], s.config["detector"],
+                                    round((time.perf_counter() - t0) * 1000), ms_deteccion)
+    except Exception:
+        log.exception("[%s] no se pudo registrar la verificación", s.slug)
+
+
 @app.post("/verify")
 async def verify(file: UploadFile = File(...), s: Sede = Depends(sede_publica)):
     """Público. Compara SOLO contra los jugadores de la sede del header X-Sede (o ?sede=, o la por defecto)."""
     if s.matriz_plantillas()[1] is None:
         _error(404, "sin_jugadores", "No hay jugadores inscritos todavía.")
 
-    umbral = s.umbral()
+    umbral_auto, umbral_duda = s.umbral_auto(), s.umbral_duda()
     antispoofing = s.config.get("antispoofing", False)
-    # Camino rápido: solo se acepta si el parecido es claramente alto; si no, se confirma con el de referencia.
-    # (Si el camino rápido ya cayó solo al de referencia, `face["rapido"]` es False y no se repite el mismo análisis.)
-    face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, rapido=True, publico=True)
-    jugador_id, score = s.buscar(face["embedding"])
-    if face.get("rapido") and (jugador_id is None or score < umbral + MARGEN_VERIFICACION_RAPIDA):
-        face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, publico=True)
-        jugador_id, score = s.buscar(face["embedding"])
+    t0 = time.perf_counter()
+
+    def clasificar(face):
+        mejor_id, score, segundo_id, segundo = s.dos_mejores(face["embedding"])
+        res = cv_engine.decidir(score if mejor_id is not None else None, segundo, umbral_auto, umbral_duda,
+                                cv_engine.MARGEN_MIN)
+        return res, mejor_id, score, segundo_id, segundo
+
+    try:
+        # Camino rápido: solo vale si es ACEPTADO con holgura (score >= umbral_auto + MARGEN_VERIFICACION_RAPIDA y
+        # margen suficiente); cualquier otro caso (dudoso, rechazado o aceptado justo) se confirma con el de
+        # referencia, que es el que decide. (Si el rápido ya cayó solo al de referencia, `face["rapido"]` es False y
+        # no se repite el mismo análisis.)
+        face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, rapido=True, publico=True)
+        res, jugador_id, score, segundo_id, segundo = clasificar(face)
+        if face.get("rapido") and (res != "aceptado" or score < umbral_auto + MARGEN_VERIFICACION_RAPIDA):
+            face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, publico=True)
+            res, jugador_id, score, segundo_id, segundo = clasificar(face)
+    except HTTPException as exc:
+        cod = exc.detail.get("codigo") if isinstance(exc.detail, dict) else None
+        _log_verificacion(s, "sin_cara" if cod == "sin_rostro" else "error", t0)
+        raise
 
     jugador = s.jugadores.get(jugador_id) if jugador_id is not None else None
-    if jugador is None:
-        # NO crea pendiente: la captura queda en memoria (3 min, un solo uso) bajo `aviso`. El kiosko decide con
-        # /verify/aviso (entrenador | nuevo | abandono) o /verify/descartar (reintento); si no dice nada, al vencer
-        # pasa sola a pendiente. Así un niño que reintenta no llena la cola del staff.
-        aviso = await run_in_threadpool(s.crear_aviso, face, s.mejor_candidato(face["embedding"]))
-        _error(404, "no_reconocido", "Jugador no reconocido.", aviso=aviso)
+    if jugador is None and res == "aceptado":
+        res = "rechazado"  # borrado entre medio (carrera): nunca se acepta a alguien que ya no está
+    _log_verificacion(s, res, t0, jugador_id, score if jugador_id is not None else None, segundo_id, segundo,
+                      face.get("ms_deteccion"))
+    if res != "aceptado":
+        # NO crea pendiente ni asistencia: la captura queda en memoria (3 min, un solo uso) bajo `aviso`. El kiosko
+        # decide con /verify/aviso (entrenador | nuevo | abandono) o /verify/descartar (reintento); si no dice nada,
+        # al vencer pasa sola a pendiente. Así un niño que reintenta no llena la cola del staff.
+        # DUDOSO: misma respuesta pública (sin nombre ni puntaje) + `dudoso: true`; la captura conserva al candidato
+        # como sugerencia para el staff, que da el veredicto final.
+        parecido = None
+        if res == "dudoso":
+            parecido = "alto" if score >= umbral_auto else "medio"
+        aviso = await run_in_threadpool(s.crear_aviso, face, (jugador_id, score), parecido)
+        extra = {"dudoso": True} if res == "dudoso" else {}
+        _error(404, "no_reconocido", "Jugador no reconocido.", aviso=aviso, **extra)
 
     registrado_a_las = s.db.asistio_hoy(jugador_id)
-    asistencia_id = s.db.registrar_asistencia(jugador_id) if registrado_a_las is None else None
+    asistencia_id = s.db.registrar_asistencia(jugador_id, similitud=score) if registrado_a_las is None else None
     # Id de un solo uso (2 min) para "No soy yo": solo disputa la asistencia que creó ESTE verify.
     reporte = s.crear_reporte(face, jugador_id, asistencia_id)
 

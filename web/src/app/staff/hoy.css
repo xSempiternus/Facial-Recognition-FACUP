@@ -1,0 +1,414 @@
+/* Pantalla «Hoy». Solo clases .hy-*; reutiliza los tokens de staff.css. */
+
+/* hero */
+.hy-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(24px, 5vw, 56px);
+  padding: 24px;
+  min-height: 0;
+}
+.hy-hero-sk {
+  display: flex;
+  align-items: center;
+  gap: clamp(24px, 5vw, 56px);
+}
+.hy-anillo {
+  position: relative;
+  flex: none;
+  width: 220px;
+  height: 220px;
+}
+.hy-anillo svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.hy-pista {
+  stroke: var(--inset);
+  stroke: color-mix(in srgb, var(--fg) 9%, transparent);
+}
+.hy-anillo-t {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.hy-anillo-t b {
+  font-size: 64px;
+  font-weight: 650;
+  letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums;
+}
+.hy-anillo-t span {
+  margin-top: 8px;
+  font-size: 16px;
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+.hy-hero-t {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 150px;
+}
+.hy-leyenda {
+  font-size: 15px;
+  color: var(--fg-2);
+}
+.hy-pct {
+  font-size: 40px;
+  font-weight: 650;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+  background: var(--brand-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+.hy-ultima {
+  margin-top: 4px;
+  font-size: 13.5px;
+  color: var(--fg-3);
+}
+
+/* acciones primarias */
+.hy-acciones {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.hy-acciones .hy-accion {
+  height: 60px;
+  width: 100%;
+  border-radius: 18px;
+  font-size: 16px;
+  font-weight: 600;
+  gap: 10px;
+}
+.hy-acciones .hy-accion svg {
+  width: 19px;
+  height: 19px;
+}
+
+/* por revisar */
+.hy-revisar .s-card-h h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hy-rev-b {
+  padding: 14px 20px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.hy-rev-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.hy-mas {
+  align-self: flex-start;
+}
+.hy-sol {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  color: var(--fg);
+  text-decoration: none;
+  transition: background-color 0.25s var(--ease);
+}
+.hy-sol:first-of-type:last-child {
+  border-top: 0;
+}
+.hy-sol:hover {
+  background: var(--hover);
+}
+.hy-sol-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--brand);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+/* lista */
+.hy-lista-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.hy-tabs {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 14px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+}
+.hy-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 11px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background-color 0.25s var(--ease), color 0.25s var(--ease);
+}
+.hy-tab span {
+  font-size: 12.5px;
+  color: var(--fg-3);
+}
+.hy-tab:hover {
+  color: var(--fg);
+}
+.hy-tab[aria-selected="true"] {
+  background: var(--glass-solid);
+  color: var(--fg);
+  box-shadow: var(--hl), 0 1px 3px rgb(0 0 0 / 0.25);
+}
+.hy-tab:focus-visible,
+.hy-fila:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+.hy-buscar {
+  position: relative;
+  flex: 1 1 200px;
+  max-width: 320px;
+  margin-left: auto;
+}
+.hy-buscar svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  translate: 0 -50%;
+  color: var(--fg-3);
+  pointer-events: none;
+}
+.hy-buscar .s-input {
+  width: 100%;
+  padding-left: 36px;
+}
+.hy-lista-b {
+  min-height: 220px;
+}
+.hy-ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px 8px 8px;
+}
+.hy-fila {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.2s var(--ease), transform 0.2s var(--ease);
+}
+.hy-fila:hover {
+  background: var(--hover);
+}
+.hy-fila:active {
+  transform: scale(0.99);
+}
+.hy-fila-n {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.hy-fila-n b {
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hy-fila-n small {
+  color: var(--fg-3);
+  font-size: 12.5px;
+}
+.hy-fila-h {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--fg-2);
+  font-size: 14px;
+}
+.hy-ind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+  font-size: 12px;
+}
+@media (max-width: 420px) {
+  .hy-ind span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+.hy-grupo h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 18px 2px;
+  color: var(--fg-3);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.hy-grupo h3 span {
+  font-weight: 500;
+}
+.hy-sk {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+
+/* curva */
+.hy-curva {
+  padding: 16px 20px 14px;
+}
+.hy-curva-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--fg-2);
+}
+.hy-curva-val {
+  color: var(--fg-2);
+}
+.hy-curva-val b {
+  color: var(--fg);
+  font-weight: 650;
+}
+.hy-curva-lienzo {
+  position: relative;
+  margin-top: 8px;
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+.hy-curva-lienzo svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.hy-linea {
+  stroke: var(--brand);
+  stroke-width: 2.25px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.hy-punto {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 22%, transparent);
+  pointer-events: none;
+  transition: left 0.18s var(--ease), top 0.18s var(--ease);
+}
+.hy-curva-ejes {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+@media (max-width: 640px) {
+  .hy-hero {
+    gap: 18px;
+    padding: 18px 16px;
+    justify-content: flex-start;
+  }
+  .hy-hero-t {
+    min-width: 0;
+  }
+  .hy-anillo {
+    width: min(156px, 42vw);
+    height: min(156px, 42vw);
+  }
+  .hy-anillo-t b {
+    font-size: 42px;
+  }
+  .hy-anillo-t span {
+    margin-top: 5px;
+    font-size: 14px;
+  }
+  .hy-pct {
+    font-size: 34px;
+  }
+  .hy-acciones .hy-accion {
+    height: 56px;
+    font-size: 15px;
+  }
+  .hy-buscar {
+    max-width: none;
+    flex-basis: 100%;
+  }
+  .hy-tabs {
+    width: 100%;
+  }
+  .hy-tab {
+    flex: 1;
+    justify-content: center;
+    padding: 0 8px;
+  }
+  .hy-rev-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hy-punto,
+  .hy-fila,
+  .hy-tab {
+    transition: none;
+  }
+}

@@ -1037,6 +1037,11 @@ input[type="range"].s-range {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 22%, transparent);
 }
+.s-alert.ok {
+  background: var(--ok-bg, var(--surface-2, transparent));
+  color: var(--ok, inherit);
+  border-color: color-mix(in srgb, var(--ok, currentColor) 22%, transparent);
+}
 .s-alert.err {
   background: var(--err-bg);
   color: var(--err);
@@ -2205,6 +2210,14 @@ input[type="range"].s-range {
 }
 .s-qrpanel {
   max-width: 100%;
+}
+@media (max-width: 560px) {
+  .s-qrpanel {
+    justify-content: center;
+  }
+  .s-qrinfo {
+    flex-basis: 100%;
+  }
 }
 .s-qrinfo {
   flex: 1 1 200px;

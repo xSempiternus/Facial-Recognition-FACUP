@@ -4,16 +4,13 @@ import clsx from "clsx";
 import {
   CalendarCheck,
   ChevronRight,
-  ClipboardList,
   FlaskConical,
-  LayoutDashboard,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
   Settings,
   TrendingUp,
-  UserPlus,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -29,12 +26,9 @@ import { Skeleton } from "./ui";
 type Item = { href: string; texto: string; corto?: string; icono: LucideIcon; exacto?: boolean };
 
 const NAV: Item[] = [
-  { href: "/staff", texto: "Resumen", icono: LayoutDashboard, exacto: true },
-  { href: "/staff/asistencia", texto: "Asistencia", icono: CalendarCheck },
-  { href: "/staff/solicitudes", texto: "Inscripciones", corto: "Solicitud.", icono: ClipboardList },
-  { href: "/staff/jugadores", texto: "Jugadores", icono: Users },
-  { href: "/staff/inscribir", texto: "Inscribir", icono: UserPlus },
-  { href: "/staff/reportes", texto: "Reportes", icono: TrendingUp },
+  { href: "/staff", texto: "Hoy", icono: CalendarCheck, exacto: true },
+  { href: "/staff/ninos", texto: "Niños", icono: Users },
+  { href: "/staff/seguimiento", texto: "Seguimiento", corto: "Seguim.", icono: TrendingUp },
   { href: "/staff/ajustes", texto: "Ajustes", icono: Settings },
 ];
 
@@ -167,16 +161,16 @@ export function Shell({ children }: { children: ReactNode }) {
           <LayoutGroup id="side">
             <nav className="s-nav" data-tour="menu">
               {NAV.map((n) => (
-                <Link key={n.href} href={n.href} className="s-link" title={n.texto} data-tour={`nav-${n.href.split("/").pop()}`} aria-current={activo(n) ? "page" : undefined}>
+                <Link key={n.href} href={n.href} className="s-link" title={n.texto} data-tour={`nav-${(n.exacto ? "hoy" : n.href.split("/").pop())}`} aria-current={activo(n) ? "page" : undefined}>
                   {activo(n) && <motion.span layoutId="ind-side" className="s-ind" transition={{ type: "spring", stiffness: 520, damping: 40 }} />}
                   <n.icono size={17} aria-hidden />
                   <span>{n.texto}</span>
-                  {n.href === "/staff/solicitudes" && pendientes > 0 && (
+                  {n.href === "/staff/ninos" && pendientes > 0 && (
                     <span className="s-count" aria-label={`${pendientes} por aprobar`}>
                       {pendientes}
                     </span>
                   )}
-                  {n.href === "/staff/asistencia" && porRevisar > 0 && (
+                  {n.href === "/staff" && porRevisar > 0 && (
                     <span className="s-count" aria-label={`${porRevisar} llegadas por revisar`}>
                       {porRevisar}
                     </span>
@@ -236,16 +230,16 @@ export function Shell({ children }: { children: ReactNode }) {
         <LayoutGroup id="tabs">
           <nav className="s-tabbar" aria-label="Navegación del panel">
             {NAV.map((n) => (
-              <Link key={n.href} href={n.href} className="s-tab" aria-current={activo(n) ? "page" : undefined}>
+              <Link key={n.href} href={n.href} className="s-tab" data-tour={`tab-${(n.exacto ? "hoy" : n.href.split("/").pop())}`} aria-current={activo(n) ? "page" : undefined}>
                 {activo(n) && <motion.span layoutId="ind-tab" className="s-ind" transition={{ type: "spring", stiffness: 520, damping: 40 }} />}
                 <n.icono size={20} aria-hidden />
                 <span>{n.corto ?? n.texto}</span>
-                {n.href === "/staff/solicitudes" && pendientes > 0 && (
+                {n.href === "/staff/ninos" && pendientes > 0 && (
                   <span className="s-count" aria-label={`${pendientes} por aprobar`}>
                     {pendientes}
                   </span>
                 )}
-                {n.href === "/staff/asistencia" && porRevisar > 0 && (
+                {n.href === "/staff" && porRevisar > 0 && (
                   <span className="s-count" aria-label={`${porRevisar} llegadas por revisar`}>
                     {porRevisar}
                   </span>
@@ -292,6 +286,8 @@ function Paleta({ abierta, onCerrar, ir, salir }: { abierta: boolean; onCerrar: 
       onClick={(e) => e.target === ref.current && onCerrar()}
     >
       <input
+        id="cmd-buscar"
+        name="cmd-buscar"
         value={q}
         placeholder="Escribe para buscar…"
         aria-label="Buscar acción"

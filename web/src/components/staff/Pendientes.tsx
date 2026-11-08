@@ -133,7 +133,7 @@ export function PendientesProvider({ children }: { children: ReactNode }) {
 
   // en Asistencia ya se ve la lista completa: no se duplica con avisos
   useEffect(() => {
-    enAsistencia.current = ruta.startsWith("/staff/asistencia");
+    enAsistencia.current = ruta === "/staff" || ruta.startsWith("/staff/asistencia");
     if (enAsistencia.current) setAvisos([]);
   }, [ruta]);
 
@@ -261,7 +261,7 @@ export function PendientesProvider({ children }: { children: ReactNode }) {
   return (
     <PendientesCtx.Provider value={valor}>
       {children}
-      {token && !ruta.startsWith("/staff/asistencia") && <Avisos avisos={avisos} onDespues={(id) => setAvisos((a) => a.filter((x) => x !== id))} />}
+      {token && ruta !== "/staff" && !ruta.startsWith("/staff/asistencia") && <Avisos avisos={avisos} onDespues={(id) => setAvisos((a) => a.filter((x) => x !== id))} />}
 
       <Dialogo abierto={!!otro} onCerrar={() => setOtro(null)} titulo="¿Quién es?">
         {otro && (
@@ -368,7 +368,7 @@ function Avisos({ avisos, onDespues }: { avisos: number[]; onDespues: (id: numbe
         </div>
       ))}
       {mas > 0 && (
-        <Link href="/staff/asistencia" className="s-aviso-mas">
+        <Link href="/staff#por-revisar" className="s-aviso-mas">
           {mas} más por revisar <ChevronRight size={14} aria-hidden />
         </Link>
       )}

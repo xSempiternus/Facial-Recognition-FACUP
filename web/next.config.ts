@@ -15,6 +15,7 @@ const CSP = [
   "font-src 'self' data:",
   "connect-src 'self'",
   "worker-src 'self' blob:",
+  "manifest-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -35,6 +36,15 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
+      // El SW debe revalidarse siempre (así las actualizaciones llegan) y puede controlar todo el origen.
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+          { key: "Service-Worker-Allowed", value: "/" },
+          { key: "Content-Type", value: "text/javascript; charset=utf-8" },
+        ],
+      },
       {
         source: "/:path*",
         headers: [

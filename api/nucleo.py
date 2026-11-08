@@ -89,7 +89,34 @@ class Sede:
             self.jugadores = nuevos
 
     def umbral(self) -> float:
+        """Umbral de parecido para comparaciones auxiliares (duplicados al inscribir, coherencia de fotos,
+        correcciones del staff): el de DUDA, que en configs antiguas es exactamente su `umbral` de siempre."""
+        return self.umbral_duda()
+
+    def umbral_auto(self) -> float:
+        """Umbral de aceptación automática en /verify (config `umbral`)."""
         return self.config["umbral"]
+
+    def umbral_duda(self) -> float:
+        """Por debajo: rechazado; entre este y el automático (o sin margen): dudoso (config `umbral_duda`)."""
+        return self.config.get("umbral_duda", self.config["umbral"])
+
+    def dos_mejores(self, embedding) -> tuple[int | None, float, int | None, float | None]:
+        """(mejor_id, mejor_score, segundo_id, segundo_score): el segundo es el mejor de los OTROS jugadores
+        (no otra foto del mismo niño). Sin jugadores: (None, -1.0, None, None)."""
+        claves, mat, normas_m = self.matriz_plantillas()
+        if mat is None or not claves:
+            return None, -1.0, None, None
+        t = np.asarray(embedding, dtype=np.float32)
+        normas = normas_m * np.linalg.norm(t)
+        puntajes = np.divide(mat @ t, normas, out=np.zeros(len(claves), np.float32), where=normas != 0)
+        i = int(puntajes.argmax())
+        mejor = claves[i]
+        otros = np.asarray(claves) != mejor
+        if not otros.any():
+            return mejor, float(puntajes[i]), None, None
+        j = int(np.flatnonzero(otros)[puntajes[otros].argmax()])
+        return mejor, float(puntajes[i]), claves[j], float(puntajes[j])
 
     def es_activo(self, jugador_id: int) -> bool:
         j = self.jugadores.get(jugador_id)
@@ -182,25 +209,33 @@ class Sede:
     def nuevo_pendiente(self, embedding: list[float], miniatura: bytes, timestamp: str | None = None,
                         motivo: str = "no_reconocido", disputa_de: int | None = None,
                         asistencia_id: int | None = None, modelo: str | None = None,
-                        sugerencia: tuple[int | None, float] | None = None) -> int:
+                        sugerencia: tuple[int | None, float] | None = None, parecido: str | None = None) -> int:
         """`sugerencia` (jugador_id, similitud) ya calculada (avisos del kiosko); si no, se calcula aquí.
-        Con disputa_de se sugiere a otro niño, no al que se reconoció por error."""
+        Con disputa_de se sugiere a otro niño, no al que se reconoció por error.
+        `parecido` 'alto' | 'medio' (captura DUDOSA): la sugerencia se conserva siempre (si el jugador existe);
+        'bajo' (rechazada) o None: se aplica el filtro de similitud mínima y, sin sugerido, parecido queda None."""
         sugerido, sim = sugerencia if sugerencia is not None else self.mejor_candidato(embedding, excluir=disputa_de)
-        if sugerido is None or sim < self.umbral() - MARGEN_CORRECCION or sugerido not in self.jugadores:
+        dudosa = parecido in ("alto", "medio")
+        if (sugerido is None or sugerido not in self.jugadores
+                or (not dudosa and sim < self.umbral() - MARGEN_CORRECCION)):
             sugerido = None  # demasiado distinto (o ya no existe): mejor no sugerir a nadie
+        if sugerido is None:
+            parecido = None
         return self.db.crear_pendiente(timestamp or ahora_ts(), embedding, modelo or self.config["modelo"],
                                        miniatura, sugerido, float(sim) if sugerido is not None else None,
-                                       motivo, disputa_de, asistencia_id)
+                                       motivo, disputa_de, asistencia_id, parecido)
 
     # ---------------------------------------------------------- avisos de fallo del kiosko (memoria, TTL 3 min)
 
-    def crear_aviso(self, face: dict, sugerencia: tuple[int | None, float]) -> str:
-        """Guarda la captura no reconocida bajo un id aleatorio de un solo uso. No crea pendiente todavía."""
+    def crear_aviso(self, face: dict, sugerencia: tuple[int | None, float], parecido: str | None = None) -> str:
+        """Guarda la captura no reconocida (o dudosa) bajo un id aleatorio de un solo uso. No crea pendiente todavía.
+        `parecido`: 'alto' | 'medio' si fue DUDOSA; None si fue rechazada (al pasar a pendiente: 'bajo' si hay
+        sugerido)."""
         token = secrets.token_urlsafe(18)
         with self.lock:
             self.avisos[token] = {"t": time.monotonic(), "timestamp": ahora_ts(), "embedding": face["embedding"],
                                   "modelo": self.config["modelo"], "miniatura": face.get("miniatura") or b"",
-                                  "sugerencia": sugerencia}
+                                  "sugerencia": sugerencia, "parecido": parecido}
         self.vencer_avisos()
         return token
 
@@ -221,7 +256,8 @@ class Sede:
 
     def _aviso_a_pendiente(self, a: dict, motivo: str) -> int:
         return self.nuevo_pendiente(a["embedding"], a["miniatura"], a["timestamp"], motivo=motivo,
-                                    modelo=a["modelo"], sugerencia=a["sugerencia"])
+                                    modelo=a["modelo"], sugerencia=a["sugerencia"],
+                                    parecido=a.get("parecido") or "bajo")
 
     def vencer_avisos(self, todos: bool = False) -> int:
         """Purga perezosa (al crear/resolver avisos, en cada consulta del staff a /pendientes* y cada

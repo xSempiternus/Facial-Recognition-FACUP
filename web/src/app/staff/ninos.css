@@ -1,0 +1,533 @@
+/* Pantalla «Niños». Solo clases .nn-*; reutiliza los tokens de staff.css. */
+
+@keyframes nn-up {
+  from {
+    transform: translateY(40px);
+    opacity: 0;
+  }
+}
+
+/* hoja */
+.staff .s-dialog.nn-sheet {
+  width: min(520px, calc(100vw - 24px));
+}
+.nn-sheet-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 16px;
+}
+.nn-sheet-h h2 {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.nn-sheet-f > .s-btn {
+  min-height: 44px;
+}
+@media (max-width: 720px) {
+  .staff .s-dialog.nn-sheet {
+    width: 100vw;
+    max-width: 100vw;
+    margin: auto 0 0;
+    border-radius: 24px 24px 0 0;
+    border-bottom: 0;
+    max-height: 92dvh;
+    animation: nn-up 0.4s var(--ease);
+  }
+  .staff .s-dialog.nn-sheet.alta {
+    height: 92dvh;
+  }
+  .nn-sheet-h {
+    position: relative;
+    padding: 22px 14px 0;
+  }
+  .nn-sheet-h::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 38px;
+    height: 4px;
+    margin-left: -19px;
+    border-radius: 4px;
+    background: var(--line-2);
+  }
+  .nn-sheet .s-dialog-b {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+}
+
+/* búsqueda, chips y pestañas */
+.nn-top {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.nn-buscar {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.nn-buscar svg {
+  position: absolute;
+  left: 16px;
+  color: var(--fg-3);
+  pointer-events: none;
+}
+.nn-buscar .s-input {
+  height: 52px;
+  padding-left: 46px;
+  border-radius: 16px;
+  font-size: 16px;
+}
+.nn-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.nn-chips::-webkit-scrollbar {
+  display: none;
+}
+.nn-chips .s-chip {
+  flex: none;
+  height: 36px;
+  border-radius: 99px;
+  padding: 0 15px;
+  font-size: 14px;
+}
+.nn-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  width: fit-content;
+  max-width: 100%;
+}
+.nn-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 10px;
+  border: 0;
+  background: none;
+  color: var(--fg-2);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.25s var(--ease), color 0.25s var(--ease);
+}
+.nn-tab[aria-selected="true"] {
+  background: color-mix(in srgb, var(--brand-strong) 32%, transparent);
+  color: var(--fg);
+  box-shadow: var(--hl), inset 0 0 0 1px color-mix(in srgb, var(--brand) 45%, transparent);
+}
+.nn-tab .nn-n {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 99px;
+  display: inline-grid;
+  place-items: center;
+  background: var(--brand-grad);
+  color: #04130d;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+@media (max-width: 720px) {
+  .nn-tabs {
+    width: 100%;
+  }
+  .nn-tab {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+/* lista */
+.nn-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nn-lista li + li {
+  border-top: 1px solid var(--line);
+}
+.nn-fila {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 64px;
+  padding: 10px 16px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.2s var(--ease);
+}
+.nn-fila:hover {
+  background: var(--hover);
+}
+.nn-fila:active {
+  background: var(--inset);
+}
+.nn-fila .s-avatar {
+  width: 40px;
+  height: 40px;
+  font-size: 13px;
+}
+.nn-fila-n {
+  flex: 1;
+  min-width: 0;
+}
+.nn-fila-n b {
+  display: block;
+  font-weight: 550;
+  font-size: 15px;
+  overflow: hidden;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+.nn-fila-n small {
+  color: var(--fg-3);
+  font-size: 13px;
+}
+.nn-fila > svg {
+  flex: none;
+  color: var(--fg-3);
+}
+.nn-mas {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 420px) {
+  .nn-fila {
+    padding: 10px 12px;
+    gap: 11px;
+  }
+}
+
+/* ficha y opciones */
+.nn-resumen {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.nn-resumen .s-avatar {
+  width: 52px;
+  height: 52px;
+  font-size: 16px;
+}
+.nn-resumen b {
+  display: block;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.nn-resumen small {
+  color: var(--fg-2);
+}
+.nn-opciones {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nn-op {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 60px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line-2);
+  background: var(--inset);
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.25s var(--ease), border-color 0.25s var(--ease), transform 0.25s var(--ease);
+}
+.nn-op:hover {
+  background: var(--hover);
+}
+.nn-op:active {
+  transform: scale(0.99);
+}
+.nn-op .ico {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--hover);
+  color: var(--fg-2);
+}
+.nn-op-t {
+  flex: 1;
+  min-width: 0;
+}
+.nn-op-t b {
+  display: block;
+  font-weight: 600;
+  font-size: 15px;
+}
+.nn-op-t small {
+  display: block;
+  color: var(--fg-2);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.nn-op > svg.chev {
+  flex: none;
+  color: var(--fg-3);
+}
+.nn-op.rec {
+  border-color: color-mix(in srgb, var(--brand) 55%, transparent);
+  background: color-mix(in srgb, var(--brand-strong) 18%, transparent);
+}
+.nn-op.rec .ico {
+  background: var(--brand-grad);
+  color: #04130d;
+}
+.nn-rec {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--brand);
+  background: var(--ok-bg);
+  vertical-align: 1px;
+}
+.nn-op.aviso .ico {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.nn-op.peligro {
+  color: var(--err);
+}
+.nn-op.peligro .ico {
+  background: var(--err-bg);
+  color: var(--err);
+}
+.nn-op.peligro .nn-op-t small {
+  color: var(--fg-3);
+}
+
+/* paso a paso */
+.nn-prog {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nn-prog small {
+  color: var(--fg-2);
+  font-size: 13px;
+}
+.nn-prog > div {
+  height: 5px;
+  border-radius: 5px;
+  background: var(--line);
+  overflow: hidden;
+}
+.nn-prog i {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--brand-grad);
+  transition: width 0.4s var(--ease);
+}
+.nn-paso {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.nn-paso h3 {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+.nn-paso > p {
+  color: var(--fg-2);
+  margin-top: -8px;
+}
+.nn-paso .s-input,
+.nn-paso .s-select {
+  height: 50px;
+  font-size: 16px;
+  border-radius: 14px;
+}
+.nn-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.nn-cats .s-chip {
+  height: 40px;
+  border-radius: 99px;
+  padding: 0 16px;
+  font-size: 14.5px;
+}
+.nn-poses {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.nn-pose {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: 14px;
+  border: 1px dashed var(--line-2);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--fg-3);
+  font-size: 12.5px;
+  text-align: center;
+}
+.nn-pose[data-cur="true"] {
+  border-style: solid;
+  border-color: var(--brand);
+  color: var(--fg);
+}
+.nn-pose[data-on="true"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--brand) 60%, transparent);
+}
+.nn-pose img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.nn-pose .s-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 30px;
+  height: 30px;
+  background: rgb(0 0 0 / 0.5);
+  color: #fff;
+}
+.nn-hecho {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 10px 0;
+}
+.nn-hecho .ico {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.nn-hecho h3 {
+  font-size: 20px;
+  font-weight: 650;
+}
+.nn-hecho p {
+  color: var(--fg-2);
+}
+
+/* por aprobar */
+.nn-listaaprob {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+@media (max-width: 420px) {
+  .nn-listaaprob {
+    grid-template-columns: 1fr;
+  }
+}
+.nn-sol {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+.nn-sol-top {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.nn-foto {
+  flex: none;
+  width: 60px;
+  height: 60px;
+  border-radius: 16px;
+  object-fit: cover;
+  background: var(--inset);
+  border: 1px solid var(--line);
+}
+.nn-sol-top h3 {
+  font-size: 16.5px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.nn-sol-top p {
+  color: var(--fg-2);
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.nn-sol-acc {
+  display: flex;
+  gap: 8px;
+}
+.nn-sol-acc .s-btn {
+  flex: 1;
+  min-height: 46px;
+}
+.nn-colapsable {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* cámara dentro de una hoja: más baja, para que el botón de captura quede a la vista */
+.staff .nn-sheet .s-camwrap .s-cam {
+  aspect-ratio: 3 / 4;
+  width: min(100%, calc(40dvh * 3 / 4));
+  max-height: 40dvh;
+  margin: 0 auto;
+}
+.staff .nn-sheet .s-camwrap .s-camactions {
+  position: static;
+  flex-wrap: nowrap;
+}
+.staff .nn-sheet .s-camwrap .s-capture,
+.staff .nn-sheet .s-camwrap .s-upload {
+  height: 48px;
+}
+@media (min-width: 721px) {
+  .staff .nn-sheet .s-camwrap .s-cam {
+    aspect-ratio: 4 / 3;
+    width: 100%;
+    max-height: 46dvh;
+  }
+}

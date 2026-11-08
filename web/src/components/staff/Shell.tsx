@@ -23,6 +23,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { api, cerrarSesion, escucharPendientes, leerToken, suscribirSesion } from "@/lib/staff-api";
 import { nombreSedeGuardado, rutaSede, sedeGuardada } from "@/lib/sede";
+import { usePendientes } from "./Pendientes";
 import { Skeleton } from "./ui";
 
 type Item = { href: string; texto: string; corto?: string; icono: LucideIcon; exacto?: boolean };
@@ -114,6 +115,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const [paleta, setPaleta] = useState(false);
   const sede = useNombreSede();
   const pendientes = usePendientesSolicitudes(!!token, ruta);
+  const { total: porRevisar } = usePendientes();
 
   useEffect(() => {
     if (token === null) router.replace(rutaSede(sedeGuardada(), "/"));
@@ -172,6 +174,11 @@ export function Shell({ children }: { children: ReactNode }) {
                   {n.href === "/staff/solicitudes" && pendientes > 0 && (
                     <span className="s-count" aria-label={`${pendientes} por aprobar`}>
                       {pendientes}
+                    </span>
+                  )}
+                  {n.href === "/staff/asistencia" && porRevisar > 0 && (
+                    <span className="s-count" aria-label={`${porRevisar} llegadas por revisar`}>
+                      {porRevisar}
                     </span>
                   )}
                 </Link>
@@ -236,6 +243,11 @@ export function Shell({ children }: { children: ReactNode }) {
                 {n.href === "/staff/solicitudes" && pendientes > 0 && (
                   <span className="s-count" aria-label={`${pendientes} por aprobar`}>
                     {pendientes}
+                  </span>
+                )}
+                {n.href === "/staff/asistencia" && porRevisar > 0 && (
+                  <span className="s-count" aria-label={`${porRevisar} llegadas por revisar`}>
+                    {porRevisar}
                   </span>
                 )}
               </Link>

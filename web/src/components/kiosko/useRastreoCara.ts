@@ -16,7 +16,7 @@ export type Postura = "sin-cara" | "lejos" | "cerca" | "descentrado" | "quieto";
 export type Desvio = "arriba" | "abajo" | "izq" | "der";
 export type Objetivo = { cx: number; cy: number; r: number }; // círculo central, en px de pantalla
 
-export const MANTENER_MS = 900; // tiempo quieto en el círculo para sacar la foto
+export const MANTENER_MS = 600; // tiempo quieto en el círculo para sacar la foto (sale del mismo cuadro estable que llenó el anillo)
 const PERDER_MS = 350; // si se mueve, el anillo se vacía en este tiempo
 const LADO_MAX_FOTO = 720; // la foto que sube al servidor: lado largo máximo (px)
 const CALIDAD_JPEG = 0.8; // ~50-90 KB a 720 px: suficiente para reconocer y liviano en datos móviles

@@ -55,3 +55,10 @@ INFO_IP = Limitador("RL_INFO_IP", 60, 600)
 # "No soy yo": estricto (por IP y por sede).
 NO_SOY_YO_IP = Limitador("RL_NO_SOY_YO_IP", 3, 600)
 NO_SOY_YO_SEDE = Limitador("RL_NO_SOY_YO_SEDE", 30, 600)
+# Avisos de fallo del kiosko. El kiosko de una sede suele ser UNA tablet (una IP) por la que pasan todos los niños:
+# el límite por IP cubre una llegada masiva con reintentos, pero corta a un script. El id del aviso es aleatorio
+# (144 bits) y de un solo uso, así que no se puede adivinar; el límite solo acota abuso.
+AVISO_IP = Limitador("RL_AVISO_IP", 40, 600)
+AVISO_SEDE = Limitador("RL_AVISO_SEDE", 120, 600)
+DESCARTAR_IP = Limitador("RL_DESCARTAR_IP", 80, 600)
+DESCARTAR_SEDE = Limitador("RL_DESCARTAR_SEDE", 240, 600)

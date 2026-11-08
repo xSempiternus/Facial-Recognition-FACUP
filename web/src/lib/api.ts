@@ -4,7 +4,7 @@ import { cabeceraSede } from "@/lib/sede";
 
 export type Verificacion =
   | { ok: true; nombre: string; categoria: string | null; yaRegistrado: boolean; registradoALas: string | null; similitud?: number; reporte?: string }
-  | { ok: false; codigo: string; mensaje: string; similitud?: number };
+  | { ok: false; codigo: string; mensaje: string; similitud?: number; aviso?: string }; // aviso: referencia de un "no reconocido" (backend nuevo)
 
 const TIEMPO_MAX_MS = 18_000; // por intento (datos móviles lentos)
 const INTENTOS = 2; // un reintento ante corte de red / timeout / 502-504
@@ -69,6 +69,7 @@ export async function verificar(foto: Blob, señal?: AbortSignal, alReintentar?:
     codigo: detalle.codigo ?? (resp.status >= 500 ? "error_servidor" : "error"),
     mensaje: detalle.mensaje ?? `Error del servidor (${resp.status}).`,
     similitud: detalle.similitud,
+    aviso: typeof detalle.aviso === "string" && detalle.aviso ? detalle.aviso : undefined,
   };
 }
 
@@ -113,4 +114,35 @@ export async function noSoyYo(reporte: string): Promise<"ok" | "limite" | "red">
   } finally {
     clearTimeout(id);
   }
+}
+
+export type TipoAviso = "entrenador" | "nuevo" | "abandono";
+
+/**
+ * "No te reconocimos": pide ayuda al staff con la referencia (`aviso`) que devolvió /verify. El staff decide siempre.
+ * "ok" (también si el aviso ya no existe: 404, el backend ya lo resolvió) | "limite" = 429 | "red" = sin conexión / error.
+ * `keepalive` permite enviar "abandono" aunque la pantalla vuelva a escanear.
+ */
+export async function avisarEntrenador(aviso: string, tipo: TipoAviso = "entrenador"): Promise<"ok" | "limite" | "red"> {
+  const ctl = new AbortController();
+  const id = setTimeout(() => ctl.abort(), 10_000);
+  try {
+    const form = new FormData();
+    form.append("aviso", aviso);
+    form.append("tipo", tipo);
+    const resp = await fetch("/api/verify/aviso", { method: "POST", body: form, signal: ctl.signal, headers: cabeceraSede(), keepalive: true });
+    if (resp.status === 429) return "limite";
+    return resp.ok || resp.status === 404 ? "ok" : "red";
+  } catch {
+    return "red";
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+/** El niño reintentó: el aviso pendiente ya no hace falta. Sin espera ni errores visibles (si falla, el backend lo cierra solo). */
+export function descartarAviso(aviso: string) {
+  const form = new FormData();
+  form.append("aviso", aviso);
+  fetch("/api/verify/descartar", { method: "POST", body: form, headers: cabeceraSede(), keepalive: true }).catch(() => {});
 }

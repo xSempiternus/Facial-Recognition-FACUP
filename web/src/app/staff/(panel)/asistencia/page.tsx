@@ -1,8 +1,10 @@
 "use client";
 
-import { Ban, BellRing, Check, CircleCheck, Clock, Download, RefreshCw, Trash2, UserPlus } from "lucide-react";
+import { Ban, BellRing, Check, CircleCheck, Clock, Download, PenLine, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
-import { CamposInvitado, DialogoQrApoderado, NinoNuevo, useCategoriasActivas } from "@/components/staff/NinoNuevo";
+import { MarcarRapido } from "@/components/staff/MarcarRapido";
+import { NinoNuevo } from "@/components/staff/NinoNuevo";
+import { AccionesPendiente, MiniaturaPendiente, textoMotivo, usePendientes } from "@/components/staff/Pendientes";
 import { BotonAyuda, Tour, type PasoTour } from "@/components/staff/Tour";
 import {
   Alerta,
@@ -30,7 +32,6 @@ import {
   ordenarCategorias,
   textoError,
   type Asistencia,
-  type Disputa,
   type Jugador,
   type Pendiente,
   type TipoJornada,
@@ -39,18 +40,12 @@ import {
 const ORIGEN = { facial: "Cámara", manual: "Manual", correccion: "Revisado", invitado: "Invitado" } as const;
 
 const PASOS: PasoTour[] = [
+  { selector: "[data-tour='cancha']", titulo: "Barra de la cancha", texto: "Siempre a mano: Pendientes (se actualiza solo), Niño nuevo y Marcar a mano. En Marcar a mano escribes un nombre, tocas y listo; tienes 5 segundos para deshacer.", lado: "abajo" },
   { selector: "[data-tour='nino-nuevo']", titulo: "¿Llegó un niño nuevo?", texto: "Toca «Niño nuevo», escribe su nombre y muestra el QR al apoderado. El niño queda anotado hoy y la familia completa la inscripción desde su celular.", lado: "abajo" },
-  { selector: "[data-tour='pendientes']", titulo: "Llegadas por revisar", texto: "Si la cámara no reconoce a alguien, o un niño toca «no soy yo», aparece aquí. Elige quién era y confirma; si es nuevo, usa «Es un niño nuevo».", lado: "abajo" },
+  { selector: "[data-tour='pendientes']", titulo: "Llegadas por revisar", texto: "Si la cámara no reconoce a alguien, o un niño toca «no soy yo» o dice que es nuevo, aparece aquí y también como aviso en cualquier pantalla. Tú decides quién es.", lado: "abajo" },
   { selector: "[data-tour='faltan']", titulo: "Marcar a mano", texto: "¿Llegó pero la cámara no lo reconoció? Búscalo en «Faltan» y toca Marcar.", lado: "izq" },
   { selector: "[data-tour='anular']", titulo: "Corregir un error", texto: "Si marcaron a alguien por error, toca Anular y escribe el motivo. No se borra: queda registrada como anulada y puedes verla con «Ver anuladas».", lado: "izq" },
 ];
-
-function mensajeDisputa(d: Disputa, nombre?: string): string | null {
-  if (d === "confirmada") return `Era ${nombre ?? "él"} de verdad: se confirmó su asistencia original.`;
-  if (d === "anulada") return "Se anuló la asistencia que el kiosko había registrado por error.";
-  if (d === "sin_asistencia") return "Quedó resuelto: no había asistencia que corregir.";
-  return null;
-}
 
 export default function Asistencia() {
   const notificar = useToast();
@@ -62,11 +57,12 @@ export default function Asistencia() {
   const [verAnuladas, setVerAnuladas] = useState(false);
   const [anular, setAnular] = useState<Asistencia | null>(null);
 
+  const { lista: pendientes, total: nPend, cambios } = usePendientes();
+  const [marcando, setMarcando] = useState(false);
   const base = useQuery(async () => {
     const [jugadores, asistencias, tipos] = await Promise.all([api.jugadores(), api.asistencias(dia, verAnuladas), api.tipoJornada(dia)]);
     return { jugadores, asistencias, tipo: (tipos[dia] ?? "entrenamiento") as TipoJornada };
-  }, `${dia}:${verAnuladas}`);
-  const pend = useQuery(api.pendientes);
+  }, `${dia}:${verAnuladas}:${cambios}`);
   const [tipoLocal, setTipoLocal] = useState<{ dia: string; tipo: TipoJornada } | null>(null);
 
   const data = base.data;
@@ -89,7 +85,6 @@ export default function Asistencia() {
 
   function recargar() {
     base.reload();
-    pend.reload();
   }
   useRefrescoAlVolver(recargar);
 
@@ -138,12 +133,35 @@ export default function Asistencia() {
         <Button onClick={recargar} aria-label="Actualizar">
           <RefreshCw size={15} aria-hidden /> Actualizar
         </Button>
-        <NinoNuevo onCreado={recargar} />
         <BotonAyuda id="asistencia" />
       </PageHeader>
       <Tour id="asistencia" pasos={PASOS} />
 
-      {data && pend.data && pend.data.length > 0 && <PorRevisar pendientes={pend.data} jugadores={data.jugadores} onCambio={recargar} />}
+      {esHoy && (
+        <nav className="s-cancha" aria-label="Accesos rápidos de la cancha" data-tour="cancha">
+          <Button
+            className="s-cancha-btn"
+            data-hay={nPend > 0 ? "" : undefined}
+            onClick={() => {
+              const el = document.getElementById("pendientes");
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+              else notificar("No hay llegadas por revisar", "info");
+            }}
+          >
+            <BellRing size={17} aria-hidden />
+            <span>Pendientes</span>
+            <span className="s-cancha-n" aria-label={`${nPend} por revisar`}>{nPend}</span>
+          </Button>
+          <NinoNuevo onCreado={recargar} className="s-cancha-btn" />
+          <Button className="s-cancha-btn" onClick={() => setMarcando(true)}>
+            <PenLine size={17} aria-hidden />
+            <span>Marcar a mano</span>
+          </Button>
+        </nav>
+      )}
+      <MarcarRapido abierto={marcando} onCerrar={() => setMarcando(false)} onCambio={recargar} />
+
+      {pendientes.length > 0 && <PorRevisar pendientes={pendientes} />}
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
         <div data-tour="jornada" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -343,157 +361,39 @@ function FormAnular({ a, onCerrar, onListo }: { a: Asistencia; onCerrar: () => v
   );
 }
 
-function PorRevisar({ pendientes, jugadores, onCambio }: { pendientes: Pendiente[]; jugadores: Jugador[]; onCambio: () => void }) {
-  const notificar = useToast();
-  const categorias = useCategoriasActivas();
-  const [elegidos, setElegidos] = useState<Record<number, number>>({});
-  const [ocupado, setOcupado] = useState<number | null>(null);
-  const [nuevo, setNuevo] = useState<Pendiente | null>(null);
-  const [qr, setQr] = useState<{ nombre: string; categoria: string } | null>(null);
-  const ordenados = useMemo(() => [...jugadores].sort((a, b) => a.nombre.localeCompare(b.nombre)), [jugadores]);
-
-  async function confirmar(p: Pendiente, jugadorId: number) {
-    setOcupado(p.id);
-    try {
-      const r = await api.asignarPendiente(p.id, jugadorId);
-      notificar(`${r.nombre}: asistencia registrada${r.foto_guardada ? " y cara aprendida" : ""}`);
-      const d = mensajeDisputa(r.disputa, r.nombre);
-      if (d) notificar(d, "info");
-      if (r.motivo) notificar(r.motivo, "info");
-    } catch (e) {
-      notificar(textoError(e, "No se pudo asignar."), "err");
-    } finally {
-      setOcupado(null);
-      onCambio();
-    }
-  }
-  async function descartar(p: Pendiente) {
-    setOcupado(p.id);
-    try {
-      const r = await api.descartarPendiente(p.id);
-      notificar("Llegada descartada");
-      if (r.disputa === "anulada") notificar("Se anuló la asistencia disputada. Si sí era el niño, márcalo a mano en «Faltan».", "info");
-    } catch (e) {
-      notificar(textoError(e, "No se pudo descartar."), "err");
-    } finally {
-      setOcupado(null);
-      onCambio();
-    }
-  }
-
+function PorRevisar({ pendientes }: { pendientes: Pendiente[] }) {
   return (
-    <section className="s-card" aria-labelledby="rev" data-tour="pendientes">
+    <section className="s-card" aria-labelledby="rev" data-tour="pendientes" id="pendientes">
       <div className="s-card-h">
         <div>
           <h2 id="rev" style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <BellRing size={15} aria-hidden /> Por revisar ({pendientes.length})
           </h2>
-          <p>La cámara no reconoció a estos niños, o ellos dijeron que no eran los reconocidos. Indica quién era: se registra su asistencia y el sistema aprende su cara. Si es un niño nuevo, anótalo como invitado.</p>
+          <p>Tú decides quién es: se registra su asistencia y el sistema aprende su cara. Los más antiguos van primero.</p>
         </div>
       </div>
       <div className="s-card-b s-grid c3">
-        {pendientes.map((p) => {
-          const elegido = elegidos[p.id] ?? p.sugerido?.id;
-          const disputa = p.motivo === "no_soy_yo" || !!p.disputa_de;
-          return (
-            <div key={p.id} className="s-pend">
-              <div className="s-row">
-                {/* eslint-disable-next-line @next/next/no-img-element -- miniatura en base64 */}
-                <img src={`data:image/jpeg;base64,${p.miniatura}`} alt="" />
-                <div>
-                  <b>Llegó a las {hora(p.timestamp)}</b>
-                  {disputa ? (
-                    <div className="s-pend-aviso">
-                      {p.disputa_de?.nombre ? `El kiosko lo reconoció como ${p.disputa_de.nombre}, pero el niño dijo que no era él.` : "El niño dijo que el kiosko se equivocó."}
-                    </div>
-                  ) : (
-                    p.sugerido && <div className="muted" style={{ fontSize: 13 }}>¿Es {p.sugerido.nombre}?</div>
-                  )}
-                  {disputa && p.sugerido && <div className="muted" style={{ fontSize: 13 }}>Podría ser {p.sugerido.nombre}.</div>}
-                </div>
+        {pendientes.map((p) => (
+          <div key={p.id} className="s-pend" data-motivo={p.motivo ?? "no_reconocido"}>
+            <div className="s-row">
+              <MiniaturaPendiente p={p} />
+              <div>
+                <b>{textoMotivo(p)}</b>
+                <div className="muted" style={{ fontSize: 13 }}>Llegó a las {hora(p.timestamp)}</div>
+                {p.motivo === "no_soy_yo" || p.disputa_de ? (
+                  <div className="s-pend-aviso">
+                    {p.disputa_de?.nombre ? `El kiosko lo reconoció como ${p.disputa_de.nombre}, pero el niño dijo que no era él.` : "El niño dijo que el kiosko se equivocó."}
+                  </div>
+                ) : p.motivo === "nino_nuevo" ? (
+                  <div className="muted" style={{ fontSize: 13 }}>Dijo que es la primera vez que viene.</div>
+                ) : null}
+                {p.sugerido && p.motivo !== "nino_nuevo" && <div className="muted" style={{ fontSize: 13 }}>{p.motivo === "no_soy_yo" || p.disputa_de ? "Podría ser" : "¿Será"} {p.sugerido.nombre}?</div>}
               </div>
-              <select
-                className="s-select"
-                aria-label={`¿Quién es? Llegada de las ${hora(p.timestamp)}`}
-                value={elegido ?? ""}
-                onChange={(e) => setElegidos((m) => ({ ...m, [p.id]: Number(e.target.value) }))}
-              >
-                <option value="" disabled>
-                  Elige al jugador…
-                </option>
-                {ordenados.map((j) => (
-                  <option key={j.id} value={j.id}>
-                    {j.nombre}
-                    {j.estado === "invitado" ? " (invitado)" : ""}
-                  </option>
-                ))}
-              </select>
-              <div className="s-row">
-                <Button variante="brand" sm style={{ flex: 1 }} disabled={!elegido} cargando={ocupado === p.id} onClick={() => elegido && confirmar(p, elegido)}>
-                  <Check size={14} aria-hidden /> Confirmar
-                </Button>
-                <Button sm icono variante="ghost" aria-label="Descartar (no era un jugador)" title="Descartar" disabled={ocupado === p.id} onClick={() => descartar(p)}>
-                  <Trash2 size={15} />
-                </Button>
-              </div>
-              <Button sm block disabled={ocupado === p.id} onClick={() => setNuevo(p)}>
-                <UserPlus size={14} aria-hidden /> Es un niño nuevo
-              </Button>
             </div>
-          );
-        })}
+            <AccionesPendiente p={p} />
+          </div>
+        ))}
       </div>
-
-      <Dialogo abierto={!!nuevo} onCerrar={() => setNuevo(null)} titulo="Es un niño nuevo">
-        {nuevo && (
-          <FormNuevo
-            key={nuevo.id}
-            p={nuevo}
-            categorias={categorias}
-            onCerrar={() => setNuevo(null)}
-            onListo={(msg, nombre, categoria) => {
-              setNuevo(null);
-              notificar(msg);
-              setQr({ nombre, categoria });
-              onCambio();
-            }}
-          />
-        )}
-      </Dialogo>
-      {qr && <DialogoQrApoderado nombre={qr.nombre} categoria={qr.categoria} onCerrar={() => setQr(null)} />}
     </section>
-  );
-}
-
-function FormNuevo({ p, categorias, onCerrar, onListo }: { p: Pendiente; categorias: string[]; onCerrar: () => void; onListo: (msg: string, nombre: string, categoria: string) => void }) {
-  const [nombre, setNombre] = useState("");
-  const [categoria, setCategoria] = useState("");
-  const [trabajando, setTrabajando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function enviar() {
-    setTrabajando(true);
-    setError(null);
-    try {
-      const r = await api.pendienteAInvitado(p.id, nombre.trim(), categoria);
-      onListo(`${r.nombre} quedó como invitado con asistencia a las ${hora(p.timestamp)}. ${mensajeDisputa(r.disputa) ?? ""}`.replace(/\s+/g, " "), r.nombre, categoria);
-    } catch (e) {
-      setError(textoError(e, "No se pudo registrar."));
-      setTrabajando(false);
-    }
-  }
-
-  return (
-    <>
-      <p className="muted">Se anota como invitado con la asistencia de la hora en que llegó (sin guardar su cara). Luego su apoderado se inscribe con un QR.</p>
-      {error && <Alerta tono="err">{error}</Alerta>}
-      <CamposInvitado nombre={nombre} categoria={categoria} categorias={categorias} onNombre={setNombre} onCategoria={setCategoria} />
-      <div className="s-dialog-f s-dialog-f-in">
-        <Button onClick={onCerrar}>Cancelar</Button>
-        <Button variante="primary" cargando={trabajando} disabled={nombre.trim().length < 2} onClick={enviar}>
-          Registrar invitado
-        </Button>
-      </div>
-    </>
   );
 }

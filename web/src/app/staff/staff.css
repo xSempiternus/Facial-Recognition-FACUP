@@ -2312,3 +2312,390 @@ input[type="range"].s-range {
 .s-collapsed .s-link span.s-count {
   opacity: 1;
 }
+
+/* ---- punto de "nuevo" en el botón de ayuda */
+.s-tour-help {
+  position: relative;
+}
+.s-tour-nuevo {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: var(--brand);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+/* ---- toasts genéricos: abajo al centro en escritorio, arriba en móvil (abajo van los avisos de llegadas) */
+.s-toasts {
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* ---- avisos de llegadas por revisar */
+.s-avisos {
+  position: fixed;
+  z-index: 90;
+  right: 20px;
+  bottom: 20px;
+  width: min(392px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+.s-aviso {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--glass-solid) 86%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--line-2);
+  border-radius: 20px;
+  box-shadow: var(--hl), 0 16px 40px -12px rgb(0 0 0 / 0.5);
+  animation: s-rise 0.45s var(--ease);
+}
+.s-aviso-top {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.s-aviso-img {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  object-fit: cover;
+  flex: none;
+  background: var(--inset);
+}
+.s-aviso-txt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.s-aviso-txt b {
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.s-aviso-txt span {
+  font-size: 12.5px;
+  color: var(--fg-3);
+}
+.s-aviso-txt .s-aviso-sug {
+  color: var(--fg-2);
+}
+.s-aviso[data-motivo="no_soy_yo"] .s-aviso-txt b {
+  color: var(--warn);
+}
+.s-aviso-mas {
+  pointer-events: auto;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 99px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--glass-solid) 86%, transparent);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--line-2);
+}
+.s-aviso-mas:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+/* acciones de un pendiente: una primaria y el resto en fila */
+.s-acc {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.s-acc-main {
+  width: 100%;
+  min-height: 44px;
+}
+.s-acc-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.s-acc-sec {
+  display: flex;
+  gap: 6px;
+}
+.s-acc-sec .s-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 8px;
+  font-size: 13px;
+}
+.s-acc-sec .s-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.s-acc-sec .s-btn svg {
+  display: none;
+}
+
+/* barra de la cancha */
+.s-cancha {
+  position: sticky;
+  top: 6px;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--glass-solid) 80%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--line-2);
+  border-radius: 20px;
+  box-shadow: var(--hl), 0 10px 30px -14px rgb(0 0 0 / 0.5);
+}
+.s-cancha .s-cancha-btn {
+  min-height: 48px;
+  width: 100%;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.s-cancha-n {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: var(--inset);
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.s-cancha-btn[data-hay] .s-cancha-n {
+  background: var(--brand-grad);
+  color: #04130d;
+}
+@media (max-width: 640px) {
+  .s-cancha {
+    gap: 6px;
+    padding: 6px;
+  }
+  .s-cancha .s-cancha-btn {
+    flex-direction: column;
+    gap: 2px;
+    height: auto;
+    min-height: 56px;
+    padding: 6px 4px;
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: normal;
+    position: relative;
+  }
+  .s-cancha-n {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    font-size: 11px;
+    padding: 0 4px;
+  }
+}
+
+/* buscador y lista para elegir jugador */
+.s-buscar {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.s-buscar > svg {
+  position: absolute;
+  left: 14px;
+  color: var(--fg-3);
+  pointer-events: none;
+}
+.s-buscar .s-input {
+  width: 100%;
+  height: 48px;
+  padding-left: 40px;
+  font-size: 16px;
+}
+.s-pick {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(52dvh, 440px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--inset);
+}
+.s-pick:empty {
+  display: none;
+}
+.s-pick-cat {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 14px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  background: color-mix(in srgb, var(--glass-solid) 92%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+.s-pick-fila {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), transform 0.15s var(--ease);
+}
+.s-pick-fila:hover {
+  background: var(--hover);
+}
+.s-pick-fila:active {
+  transform: scale(0.99);
+  background: var(--hover);
+}
+.s-pick-fila:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--brand);
+}
+.s-pick-n {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.s-pick-n b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.s-pick-n small {
+  color: var(--fg-3);
+}
+.s-pick-marcar {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand);
+}
+.s-pick-cuenta {
+  margin-right: auto;
+  align-self: center;
+}
+
+/* deshacer 5 s */
+.s-deshacer-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.s-deshacer {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 4px 14px;
+  min-height: 48px;
+  border-radius: 14px;
+  background: var(--ok-bg);
+  color: var(--fg);
+  animation: s-rise 0.35s var(--ease);
+}
+.s-deshacer > svg {
+  color: var(--ok);
+  flex: none;
+}
+.s-deshacer-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.s-deshacer-barra {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 100%;
+  background: var(--ok);
+  transform-origin: left;
+  animation: s-deshacer-barra var(--dur, 5s) linear forwards;
+}
+@keyframes s-deshacer-barra {
+  to {
+    transform: scaleX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .s-deshacer-barra {
+    animation: none;
+    opacity: 0.4;
+  }
+}
+
+@media (max-width: 640px) {
+  .s-avisos {
+    right: 12px;
+    left: 12px;
+    width: auto;
+    bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+  .s-aviso {
+    border-radius: 22px;
+  }
+  .s-toasts {
+    bottom: auto;
+    top: calc(64px + env(safe-area-inset-top));
+    left: 12px;
+    right: 12px;
+    transform: none;
+    width: auto;
+  }
+}
+.s-dialog-b > .s-chips,
+.s-dialog-b > .s-buscar,
+.s-dialog-b > .s-deshacer-lista {
+  flex-shrink: 0;
+}
+.s-dialog-b > .s-chips .s-chip {
+  height: 40px;
+}

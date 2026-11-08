@@ -1214,3 +1214,90 @@ body {
     max-height: 60dvh;
   }
 }
+
+/* ===== Fallo ===== */
+/* "No te reconocimos": una acción principal (verde de marca) y dos secundarias de vidrio. Alto fijo para no saltar. */
+.reco-fallo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 460px;
+  min-height: 56px;
+  transition: opacity 0.25s ease;
+}
+.reco-fallo[data-solo] {
+  align-items: center;
+}
+.reco-fallo[inert] {
+  opacity: 0;
+  pointer-events: none;
+}
+.reco-fallo-principal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 56px;
+  border-radius: 999px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #fff;
+  background: #008d36;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 6px 20px rgb(0 141 54 / 0.35);
+  transition: background 0.15s ease, scale 0.15s ease;
+}
+.reco-fallo[data-solo] .reco-fallo-principal {
+  max-width: 280px;
+}
+.reco-fallo-principal:hover {
+  background: #00a03e;
+}
+.reco-fallo-principal:active,
+.reco-fallo-btn:active {
+  scale: 0.98;
+}
+.reco-fallo-sec {
+  display: grid;
+  grid-template-columns: 1.55fr 1fr;
+  gap: 0.5rem;
+}
+.reco-fallo-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding-inline: 0.75rem;
+  border-radius: 999px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: rgb(246 250 248 / 0.95);
+  background: rgb(255 255 255 / 0.14);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.3),
+    inset 0 0 0 1px rgb(255 255 255 / 0.1);
+  transition: background 0.15s ease, scale 0.15s ease;
+}
+.reco-fallo-btn:hover {
+  background: rgb(255 255 255 / 0.22);
+}
+.reco-fallo-btn:disabled {
+  opacity: 0.6;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reco-fallo,
+  .reco-fallo-principal,
+  .reco-fallo-btn {
+    transition: none;
+  }
+  .reco-fallo-principal:active,
+  .reco-fallo-btn:active {
+    scale: 1;
+  }
+}

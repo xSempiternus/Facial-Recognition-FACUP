@@ -12,6 +12,8 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
+import { api } from "@/lib/staff-api";
+import { sedeActual } from "@/lib/sede";
 
 export type LadoTour = "arriba" | "abajo" | "izq" | "der" | "auto";
 
@@ -24,16 +26,27 @@ export interface PasoTour {
 }
 
 const PREFIJO = "facup:tour:";
-const RETRASO_MS = 700;
+const RETRASO_MS = 900;
+const REINTENTO_MS = 1500;
 const PAD = 8; // aire alrededor del objetivo
 const GAP = 14; // distancia objetivo-popover
 const MARGEN = 12; // margen al borde del viewport
 
 // ------------------------------------------------------------------ estado compartido (Tour <-> useTour <-> BotonAyuda)
+//
+// Qué guías ya vio la sede vive en el SERVIDOR (/staff/preferencias): la URL del túnel cambia en cada arranque, y
+// localStorage es por origen, así que solo con él todo reaparecía. localStorage queda como acelerador y como red de
+// seguridad: lo que ya marcó ahí no se vuelve a mostrar aunque el servidor falle.
 
 const abiertos = new Set<string>();
+const vistos = new Set<string>(); // lo que sabemos visto (servidor + local)
+let cargadas = false; // ya intentamos leer del servidor (con o sin éxito)
+let cargando: Promise<void> | null = null;
+let mostradoEnSesion = false; // nunca dos tours automáticos en la misma sesión
 const oyentes = new Set<() => void>();
-const emitir = () => oyentes.forEach((f) => f());
+const emitir = () => {
+  oyentes.forEach((f) => f());
+};
 const suscribir = (f: () => void) => {
   oyentes.add(f);
   return () => {
@@ -41,19 +54,87 @@ const suscribir = (f: () => void) => {
   };
 };
 
-function leerVisto(id: string): boolean {
+const sede = () => sedeActual() ?? "_";
+const claveLocal = (id: string) => `${PREFIJO}${sede()}:${id}`;
+
+function vistoLocal(id: string): boolean {
   try {
-    return localStorage.getItem(PREFIJO + id) === "1";
+    return localStorage.getItem(claveLocal(id)) === "1" || localStorage.getItem(PREFIJO + id) === "1";
   } catch {
     return false;
   }
 }
-function marcarVisto(id: string) {
+function guardarLocal(id: string) {
   try {
-    localStorage.setItem(PREFIJO + id, "1");
+    localStorage.setItem(claveLocal(id), "1");
   } catch {
     /* sin storage: la app sigue funcionando */
   }
+}
+function limpiarLocal() {
+  try {
+    const borrar: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(PREFIJO)) borrar.push(k);
+    }
+    borrar.forEach((k) => localStorage.removeItem(k));
+  } catch {
+    /* nada que limpiar */
+  }
+}
+
+function esVisto(id: string): boolean {
+  return vistos.has(id) || vistoLocal(id);
+}
+
+/** Lee del servidor lo que la sede ya vio (una sola vez por carga de página). Si falla, vale lo local. */
+export function cargarTours(): Promise<void> {
+  if (cargadas) return Promise.resolve();
+  cargando ??= api
+    .preferencias()
+    .then((r) => {
+      r.tours_vistos.forEach((id) => {
+        vistos.add(id);
+        guardarLocal(id);
+      });
+    })
+    .catch(() => {
+      /* sin servidor: nos quedamos con lo que marcó localStorage */
+    })
+    .finally(() => {
+      cargadas = true;
+      cargando = null;
+      emitir();
+    });
+  return cargando;
+}
+
+function marcarVisto(id: string) {
+  if (esVisto(id) && vistos.has(id)) return;
+  vistos.add(id);
+  guardarLocal(id);
+  emitir();
+  api.marcarTour(id).catch(() => {
+    /* el local ya lo recuerda; no molestamos al staff */
+  });
+}
+
+/** "Volver a ver las guías": borra lo visto en el servidor y en este navegador. */
+export async function reiniciarTours() {
+  await api.reiniciarTours();
+  vistos.clear();
+  limpiarLocal();
+  mostradoEnSesion = false;
+  emitir();
+}
+
+/** ¿Hay un diálogo abierto o el usuario está escribiendo? Entonces no es momento de interrumpir. */
+function ocupado(): boolean {
+  if (document.querySelector("dialog[open]")) return true;
+  const a = document.activeElement;
+  if (!a || a === document.body) return false;
+  return a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement || (a as HTMLElement).isContentEditable;
 }
 
 /** Controla el tour de una pantalla: `abrir()` lo (re)inicia, `cerrar()` lo cierra y lo marca como visto. */
@@ -63,8 +144,16 @@ export function useTour(id: string) {
     () => abiertos.has(id),
     () => false,
   );
+  // hasta saber qué vio la sede se considera visto: así no parpadea el punto de "nuevo"
+  const visto = useSyncExternalStore(
+    suscribir,
+    () => !cargadas || esVisto(id),
+    () => true,
+  );
   const abrir = useCallback(() => {
+    if (abiertos.size > 0) return; // un tour a la vez
     abiertos.add(id);
+    mostradoEnSesion = true;
     emitir();
   }, [id]);
   const cerrar = useCallback(() => {
@@ -72,22 +161,27 @@ export function useTour(id: string) {
     abiertos.delete(id);
     emitir();
   }, [id]);
-  return { abrir, cerrar, abierto, visto: leerVisto(id) };
+  return { abrir, cerrar, abierto, visto };
 }
 
 // ------------------------------------------------------------------ botón de ayuda
 
+/** Abre la guía de la pantalla. Lleva un punto sutil de «nuevo» hasta que se abre por primera vez. */
 export function BotonAyuda({ id, className }: { id: string; className?: string }) {
-  const { abrir } = useTour(id);
+  const { abrir, visto } = useTour(id);
   return (
     <button
       type="button"
       className={className ? `s-tour-help ${className}` : "s-tour-help"}
-      aria-label="Ver guía de esta pantalla"
+      aria-label={visto ? "Ver guía de esta pantalla" : "Ver guía de esta pantalla (nueva)"}
       title="Ver guía de esta pantalla"
-      onClick={abrir}
+      onClick={() => {
+        marcarVisto(id);
+        abrir();
+      }}
     >
       <CircleHelp size={18} aria-hidden />
+      {!visto && <span className="s-tour-nuevo" aria-hidden />}
     </button>
   );
 }
@@ -177,16 +271,37 @@ function calcular(sel: string | undefined, lado: LadoTour, pop: HTMLElement | nu
 
 const FOCUSABLES = "button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
 
-export function Tour({ id, pasos }: { id: string; pasos: PasoTour[] }) {
+/**
+ * `auto`: se abre solo UNA vez por sede (el tour de bienvenida). Las demás guías no arrancan solas: se abren con el «?».
+ * Espera a saber qué vio la sede, no interrumpe si hay un diálogo abierto o se está escribiendo, y no se muestra
+ * si ya hubo otro tour en esta sesión.
+ */
+export function Tour({ id, pasos, auto = false }: { id: string; pasos: PasoTour[]; auto?: boolean }) {
   const { abrir, cerrar, abierto } = useTour(id);
   const hayPasos = pasos.length > 0;
 
-  // arranque automático la primera vez (con retraso para que la pantalla termine de pintar)
   useEffect(() => {
-    if (leerVisto(id) || !hayPasos) return;
-    const t = window.setTimeout(abrir, RETRASO_MS);
-    return () => window.clearTimeout(t);
-  }, [id, hayPasos, abrir]);
+    if (!auto || !hayPasos) return;
+    let vivo = true;
+    let t = 0;
+    const intentar = () => {
+      if (!vivo) return;
+      if (mostradoEnSesion || esVisto(id)) return;
+      if (ocupado() || abiertos.size > 0 || document.visibilityState !== "visible") {
+        t = window.setTimeout(intentar, REINTENTO_MS);
+        return;
+      }
+      marcarVisto(id); // se marca al abrir: aunque recarguen a mitad, no vuelve
+      abrir();
+    };
+    cargarTours().then(() => {
+      if (vivo) t = window.setTimeout(intentar, RETRASO_MS);
+    });
+    return () => {
+      vivo = false;
+      window.clearTimeout(t);
+    };
+  }, [id, auto, hayPasos, abrir]);
 
   if (!abierto || !hayPasos) return null;
   return <TourAbierto id={id} pasos={pasos} cerrar={cerrar} />;

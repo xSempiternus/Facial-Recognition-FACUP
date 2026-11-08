@@ -9,9 +9,16 @@ conteos) y la captura pasa a /pendientes con `disputa_de`. Al resolver:
   - descartar (DELETE) o vencer sin revisión (7 días) -> la disputada se ANULA (nadie confirmó que fuera él;
     si el staff sabe que sí era, puede marcarlo con /asistencia/manual).
 Si el /verify era 'ya_registrado', no se toca ninguna asistencia: solo la captura pasa a pendientes.
+
+Fallo de reconocimiento: /verify no reconocido NO crea pendiente; entrega un `aviso` (captura en memoria, 3 min,
+un solo uso). /verify/aviso tipo=entrenador|abandono -> pendiente 'no_reconocido', tipo=nuevo -> 'nino_nuevo';
+/verify/descartar -> se olvida (reintento). Sin respuesta en 3 min -> pendiente 'no_reconocido' (abandono), por la
+purga perezosa (Sede.vencer_avisos: en /verify*, /pendientes*, /health/detalle y una tarea cada 15 s). Nada de esto
+registra asistencia: el veredicto es del staff.
 """
 
 import base64
+import time
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 
@@ -53,25 +60,44 @@ def _crear_invitado(s: Sede, nombre: str, cat: str | None, timestamp: str | None
 
 # ---------------------------------------------------------------- pendientes (persistentes)
 
+def _item_pendiente(s: Sede, d: dict) -> dict:
+    sug = s.jugadores.get(d["sugerido_id"]) if d["sugerido_id"] else None
+    disp = d["disputa_de_jugador_id"]
+    return {
+        "id": d["id"],
+        "timestamp": d["timestamp"],
+        "miniatura": base64.b64encode(d["miniatura"] or b"").decode(),
+        "motivo": d["motivo"],  # no_reconocido | no_soy_yo | nino_nuevo
+        "sugerido": ({"id": d["sugerido_id"], "nombre": sug["nombre"], "similitud": round(d["similitud"], 4)}
+                     if sug else None),
+        "disputa_de": ({"id": disp, "nombre": s.jugadores[disp]["nombre"] if disp in s.jugadores else None}
+                       if disp else None),
+    }
+
+
 @router.get("/pendientes")
 def pendientes(s: Sede = Depends(sede_staff)):
-    """Llegadas no reconocidas y reportes "No soy yo", de la más reciente a la más antigua."""
+    """Llegadas no reconocidas, niños nuevos y reportes "No soy yo", de la más reciente a la más antigua."""
+    s.vencer_avisos()
     s.db.purgar_pendientes()
-    salida = []
-    for d in s.db.listar_pendientes():
-        sug = s.jugadores.get(d["sugerido_id"]) if d["sugerido_id"] else None
-        disp = d["disputa_de_jugador_id"]
-        salida.append({
-            "id": d["id"],
-            "timestamp": d["timestamp"],
-            "miniatura": base64.b64encode(d["miniatura"] or b"").decode(),
-            "motivo": d["motivo"],
-            "sugerido": ({"id": d["sugerido_id"], "nombre": sug["nombre"], "similitud": round(d["similitud"], 4)}
-                         if sug else None),
-            "disputa_de": ({"id": disp, "nombre": s.jugadores[disp]["nombre"] if disp in s.jugadores else None}
-                           if disp else None),
-        })
-    return salida
+    return [_item_pendiente(s, d) for d in s.db.listar_pendientes()]
+
+
+PURGA_NOVEDADES_S = 60
+
+
+@router.get("/pendientes/novedades")
+def pendientes_novedades(desde: int = Query(0, ge=0, le=2**62), s: Sede = Depends(sede_staff)):
+    """Sondeo barato del staff (~cada 4 s): {ultimo_id, total, nuevos} con los pendientes de id > desde (los 20
+    más recientes, del más nuevo al más antiguo). `ultimo_id` = max(desde, mayor id vigente): el cliente lo manda
+    como `desde` en la siguiente consulta. `total` = pendientes vigentes."""
+    s.vencer_avisos()
+    ahora = time.monotonic()
+    if ahora - getattr(s, "_purga_novedades", 0.0) > PURGA_NOVEDADES_S:  # la retención no necesita correr cada 4 s
+        s._purga_novedades = ahora
+        s.db.purgar_pendientes()
+    r = s.db.novedades_pendientes(desde)
+    return {"ultimo_id": r["ultimo_id"], "total": r["total"], "nuevos": [_item_pendiente(s, d) for d in r["nuevos"]]}
 
 
 def _resolver_disputa(s: Sede, d: dict, jugador_id: int | None) -> str | None:
@@ -164,6 +190,37 @@ def no_soy_yo(request: Request, reporte: str = Form(""), s: Sede = Depends(sede_
         s.nuevo_pendiente(r["embedding"], r["miniatura"], r["timestamp"], motivo="no_soy_yo",
                           disputa_de=r["jugador_id"], asistencia_id=aid if disputada else None)
         s.db.auditar("no_soy_yo", f"jugador #{r['jugador_id']} asistencia #{aid if disputada else '-'}")
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------- fallo de reconocimiento (público)
+
+_TIPOS_AVISO = ("entrenador", "nuevo", "abandono")
+
+
+@router.post("/verify/aviso")
+def verify_aviso(request: Request, aviso: str = Form(""), tipo: str = Form(""), s: Sede = Depends(sede_publica)):
+    """El kiosko dice qué pasó con un /verify no reconocido: entrenador | abandono -> pendiente 'no_reconocido';
+    nuevo -> pendiente 'nino_nuevo'. Un solo uso e idempotente (repetirlo no crea otro pendiente). NUNCA registra
+    asistencia: el staff decide en /pendientes. 404 genérico si el aviso no existe o venció."""
+    limites.AVISO_IP.exigir(_cliente(request))
+    limites.AVISO_SEDE.exigir(s.slug)
+    if tipo not in _TIPOS_AVISO:
+        error(400, "datos_invalidos", "Datos inválidos.")
+    r = s.resolver_aviso(aviso.strip()[:64], tipo)
+    if r == "no_existe":
+        error(404, "aviso_invalido", "El aviso no existe o expiró.")
+    if r == "ok":
+        s.db.auditar("aviso_kiosko", tipo)
+    return {"status": "ok"}
+
+
+@router.post("/verify/descartar")
+def verify_descartar(request: Request, aviso: str = Form(""), s: Sede = Depends(sede_publica)):
+    """El niño reintenta: la captura en memoria se descarta (no queda pendiente). Siempre {status: ok}."""
+    limites.DESCARTAR_IP.exigir(_cliente(request))
+    limites.DESCARTAR_SEDE.exigir(s.slug)
+    s.resolver_aviso(aviso.strip()[:64], None)
     return {"status": "ok"}
 
 

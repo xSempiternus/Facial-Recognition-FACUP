@@ -1,5 +1,7 @@
 """Prueba de punta a punta de los flujos de inscripción por los padres, invitados, pendientes persistentes,
-"No soy yo", anulaciones, auditoría y aislamiento entre sedes.
+"No soy yo", fallo de reconocimiento controlado por el kiosko (aviso / descartar / abandono por vencimiento con
+AVISO_TTL_S corto), novedades del staff, tours del staff, sin-asistencia-hoy, marcado manual, anulaciones,
+auditoría, límites y aislamiento entre sedes.
 
 Levanta la API real (uvicorn) en un puerto libre con un DATA_DIR temporal (dos sedes nuevas, nunca la data real),
 la reinicia una vez para comprobar persistencia y borra todo al terminar.
@@ -41,7 +43,11 @@ PERSONA_C = ["img8.jpg", "img9.jpg", "img49.jpg", "img50.jpg"]
 GRUPO = "couple.jpg"
 PIN_A, PIN_B = "11112222", "33334444"
 LIMITES = {"RL_INSCRIPCION_IP": "16/3600", "RL_INSCRIPCION_TOKEN": "12/3600", "RL_INFO_IP": "200/600",
-           "RL_NO_SOY_YO_IP": "4/600", "RL_NO_SOY_YO_SEDE": "50/600"}
+           "RL_NO_SOY_YO_IP": "4/600", "RL_NO_SOY_YO_SEDE": "50/600",
+           "RL_AVISO_IP": "14/600", "RL_AVISO_SEDE": "100/600", "RL_DESCARTAR_IP": "10/600",
+           "RL_DESCARTAR_SEDE": "100/600"}
+# TTL corto de las capturas no reconocidas (en producción 180 s) para probar el abandono por vencimiento.
+AVISO_TTL_S = 8
 
 resultados: list[tuple[bool, str]] = []
 
@@ -87,7 +93,7 @@ class Servidor:
         self.proc = None
         self.env = {**os.environ, "DATA_DIR": str(data_dir), "DEFAULT_SEDE": "sede-a", "STAFF_PIN": PIN_A,
                     "AUTH_SECRET": "secreto-de-prueba-flujos", "TRUST_PROXY": "0", "PYTHONIOENCODING": "utf-8",
-                    "TF_CPP_MIN_LOG_LEVEL": "3", "GEMINI_API_KEY": "", **LIMITES}
+                    "TF_CPP_MIN_LOG_LEVEL": "3", "GEMINI_API_KEY": "", "AVISO_TTL_S": str(AVISO_TTL_S), **LIMITES}
 
     def iniciar(self, timeout=420):
         self.fh = open(self.log, "ab")
@@ -154,6 +160,15 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
 
     def verify(sede, nombre_foto):
         return c.req("POST", "/verify", sede=sede, files={"file": ("k.jpg", F[nombre_foto], "image/jpeg")})
+
+    def aviso(sede, ref, tipo):
+        return c.req("POST", "/verify/aviso", sede=sede, data={"aviso": ref, "tipo": tipo})
+
+    def descartar(sede, ref):
+        return c.req("POST", "/verify/descartar", sede=sede, data={"aviso": ref})
+
+    def novedades(token, desde=0):
+        return c.req("GET", "/pendientes/novedades", token=token, params={"desde": str(desde)})
 
     def login(sede, pin):
         st, b = c.req("POST", "/auth/login", data={"pin": pin, "sede": sede})
@@ -265,6 +280,28 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     check(st == 200 and ap_b["nombre"] == "Beto Dos Tres", "aprobar con nombre corregido", (st, ap_b))
     id_b = ap_b["id"]
 
+    print("\n== Sin asistencia hoy (ayuda para marcar a mano)")
+    st, sa = c.req("GET", "/jugadores/sin-asistencia-hoy", token=ta)
+    check(st == 200 and [j["id"] for j in sa] == [id_a, id_b] and all(set(j) == {"id", "nombre", "categoria"} for j in sa),
+          "activos sin asistencia, por categoría y nombre, sin miniaturas", sa)
+    st, b = c.req("GET", "/jugadores/sin-asistencia-hoy")
+    check(st == 401, "sin-asistencia-hoy exige staff", (st, b))
+
+    print("\n== Preferencias / tours del staff (por sede, persistentes)")
+    st, pr = c.req("GET", "/staff/preferencias", token=ta)
+    check(st == 200 and pr == {"tours_vistos": []}, "sin tours vistos al inicio", pr)
+    c.req("POST", "/staff/tours/kiosko-intro", token=ta)
+    st, pr = c.req("POST", "/staff/tours/kiosko-intro", token=ta)
+    c.req("POST", "/staff/tours/panel-2", token=ta)
+    st2, pr2 = c.req("GET", "/staff/preferencias", token=ta)
+    check(st == 200 and pr2["tours_vistos"] == ["kiosko-intro", "panel-2"], "marcar tour idempotente", (pr, pr2))
+    malos = [c.req("POST", f"/staff/tours/{t}", token=ta)[0] for t in ("Mayus", "con_guion_bajo", "x" * 41)]
+    check(malos == [400, 400, 400], "id de tour inválido -> 400", malos)
+    st, b = c.req("POST", "/staff/tours/kiosko-intro")
+    check(st == 401, "tours exigen staff", st)
+    st, prb = c.req("GET", "/staff/preferencias", token=tb)
+    check(prb == {"tours_vistos": []}, "tours aislados por sede", prb)
+
     print("\n== Kiosko: reconoce, 'No soy yo', disputa")
     st, v = verify("sede-a", "img10.jpg")
     check(st == 200 and v["nombre"] == "Ana" and v["ya_registrado"] is False and v.get("reporte"),
@@ -287,6 +324,8 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     st, pend = c.req("GET", "/pendientes", token=ta)
     check(len(pend) == 1 and pend[0]["motivo"] == "no_soy_yo" and pend[0]["disputa_de"]["nombre"] == "Ana Uno"
           and pend[0]["miniatura"], "pendiente con disputa_de (un solo pendiente pese al reuso)", pend)
+    st, sa = c.req("GET", "/jugadores/sin-asistencia-hoy", token=ta)
+    check(id_a in [j["id"] for j in sa], "la asistencia disputada no cuenta como válida en sin-asistencia-hoy", sa)
 
     print("\n== Persistencia: reinicio del servidor")
     srv.detener()
@@ -294,6 +333,11 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     st, pend2 = c.req("GET", "/pendientes", token=ta)
     check(st == 200 and [p["id"] for p in pend2] == [p["id"] for p in pend] and pend2[0]["disputa_de"]["id"] == id_a,
           "pendientes persisten tras reiniciar (token sigue válido con AUTH_SECRET)", (st, pend2))
+    st, pr = c.req("GET", "/staff/preferencias", token=ta)
+    check(pr == {"tours_vistos": ["kiosko-intro", "panel-2"]}, "tours persisten tras reiniciar", pr)
+    st, pr = c.req("DELETE", "/staff/tours", token=ta)
+    st2, pr2 = c.req("GET", "/staff/preferencias", token=ta)
+    check(st == 200 and pr2 == {"tours_vistos": []}, "DELETE /staff/tours los reinicia", pr2)
 
     print("\n== Resolver disputa asignando a otro niño")
     st, asg = c.req("POST", f"/pendientes/{pend2[0]['id']}/asignar", token=ta, data={"jugador_id": id_b})
@@ -327,12 +371,76 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     cods = [c.req("POST", "/verify/no-soy-yo", sede="sede-a", data={"reporte": "inventado"})[0] for _ in range(3)]
     check(cods == [200, 200, 429], "reporte inválido -> 200 genérico; rate limit de 'No soy yo' por IP", cods)
 
-    print("\n== Llegada no reconocida -> invitado -> aprobación de su familia")
+    print("\n== Fallo de reconocimiento controlado por el kiosko (aviso / descartar)")
+    st, n0 = novedades(ta)
     st, v = verify("sede-a", "img8.jpg")
-    check(st == 404 and codigo(v) == "no_reconocido", "desconocido -> no_reconocido", (st, v))
+    a1 = (v.get("detail") or {}).get("aviso") if isinstance(v, dict) else None
+    check(st == 404 and codigo(v) == "no_reconocido" and isinstance(a1, str) and len(a1) >= 20
+          and set(v["detail"]) == {"codigo", "mensaje", "aviso"}, "desconocido -> no_reconocido con aviso", (st, v))
     st, pend = c.req("GET", "/pendientes", token=ta)
-    p_nuevo = next((p for p in pend if p["motivo"] == "no_reconocido"), None)
-    check(p_nuevo is not None and p_nuevo["disputa_de"] is None, "pendiente no reconocido persistido", pend)
+    st2, n1 = novedades(ta, n0["ultimo_id"])
+    check(pend == [] and n1["nuevos"] == [] and n1["total"] == 0, "/verify no reconocido NO crea pendiente", (pend, n1))
+    st, b = descartar("sede-a", a1)
+    st2, b2 = aviso("sede-a", a1, "nuevo")
+    st3, pend = c.req("GET", "/pendientes", token=ta)
+    check(st == 200 and b == {"status": "ok"} and st2 == 404 and codigo(b2) == "aviso_invalido" and pend == [],
+          "descartar: sin pendiente y el aviso ya no sirve", (st, b, st2, b2, pend))
+    st, b = descartar("sede-a", a1)
+    check(st == 200 and b == {"status": "ok"}, "descartar repetido -> 200 genérico", (st, b))
+    st, v = verify("sede-a", "img8.jpg")
+    a2 = v["detail"]["aviso"]
+    check(a2 != a1, "cada intento entrega un aviso nuevo")
+    st, b = aviso("sede-b", a2, "nuevo")
+    check(st == 404, "aviso de la sede A no sirve en la sede B", (st, b))
+    st, b = aviso("sede-a", a2, "otro")
+    check(st == 400, "tipo de aviso inválido -> 400", (st, b))
+    st, b = aviso("sede-a", "inventado-" * 3, "nuevo")
+    check(st == 404 and codigo(b) == "aviso_invalido", "aviso inventado -> 404 genérico", (st, b))
+    st, b = aviso("sede-a", a2, "nuevo")
+    st2, b2 = aviso("sede-a", a2, "nuevo")
+    st3, b3 = aviso("sede-a", a2, "entrenador")
+    st4, pend = c.req("GET", "/pendientes", token=ta)
+    check(st == 200 and b == {"status": "ok"} and st2 == 200 and b2 == {"status": "ok"} and st3 == 200,
+          "aviso 'nuevo' -> ok, idempotente", (st, b, st2, b2, st3, b3))
+    check(len(pend) == 1 and pend[0]["motivo"] == "nino_nuevo" and pend[0]["disputa_de"] is None and pend[0]["miniatura"],
+          "un solo pendiente 'nino_nuevo' pese a repetir el aviso", pend)
+    st, asis = c.req("GET", "/asistencias", token=ta, params={"hoy": "true", "todas": "true"})
+    check(st == 200 and len(asis) == 3, "los avisos no crean asistencia", asis)
+    st, n2 = novedades(ta, n0["ultimo_id"])
+    check(st == 200 and n2["total"] == 1 and [x["id"] for x in n2["nuevos"]] == [pend[0]["id"]]
+          and n2["ultimo_id"] == pend[0]["id"] and n2["nuevos"][0]["motivo"] == "nino_nuevo"
+          and n2["nuevos"][0]["miniatura"] and set(n2["nuevos"][0]) == {"id", "timestamp", "motivo", "miniatura",
+                                                                        "sugerido", "disputa_de"},
+          "novedades con desde trae solo lo nuevo", n2)
+    st, n3 = novedades(ta, n2["ultimo_id"])
+    check(n3 == {"ultimo_id": n2["ultimo_id"], "total": 1, "nuevos": []}, "novedades desde el último id -> vacío", n3)
+    st, b = c.req("GET", "/pendientes/novedades")
+    st2, nb = novedades(tb)
+    check(st == 401 and nb["total"] == 0 and nb["nuevos"] == [], "novedades exige staff y está aislada por sede", (st, nb))
+    st, b = c.req("GET", "/pendientes/novedades", token=ta, params={"desde": "-1"})
+    check(st == 422, "desde negativo -> 422", st)
+
+    print("\n== Captura sin aviso -> pendiente 'abandono' al vencer")
+    st, v = verify("sede-a", "img49.jpg")  # persona C, aún no inscrita
+    a3 = v["detail"]["aviso"]
+    st, pend = c.req("GET", "/pendientes", token=ta)
+    check(len(pend) == 1, "recién capturada: todavía no es pendiente", pend)
+    t0, nuevo = time.time(), []
+    while time.time() - t0 < AVISO_TTL_S + 25 and not nuevo:
+        time.sleep(2)
+        st, n4 = novedades(ta, n2["ultimo_id"])
+        nuevo = n4["nuevos"]
+    check(len(nuevo) == 1 and nuevo[0]["motivo"] == "no_reconocido" and n4["total"] == 2,
+          f"tras {AVISO_TTL_S} s sin respuesta pasa sola a pendiente (no_reconocido)", n4)
+    st, b = aviso("sede-a", a3, "entrenador")
+    st2, n5 = novedades(ta, n2["ultimo_id"])
+    check(st == 200 and n5["total"] == 2, "aviso tardío sobre una captura ya convertida: ok sin duplicar", (st, b, n5))
+    p_abandono = nuevo[0]["id"] if nuevo else None  # queda para la prueba de retención
+
+    print("\n== Llegada no reconocida -> invitado -> aprobación de su familia")
+    st, pend = c.req("GET", "/pendientes", token=ta)
+    p_nuevo = next((p for p in pend if p["motivo"] == "nino_nuevo"), None)
+    check(p_nuevo is not None and p_nuevo["disputa_de"] is None, "pendiente 'nino_nuevo' persistido", pend)
     st, inv = c.req("POST", f"/pendientes/{p_nuevo['id']}/invitado", token=ta,
                     data={"nombre": "Carlos Nuevo", "categoria": "Sub-10"})
     check(st == 200 and inv["estado"] == "invitado", "pendiente -> invitado", (st, inv))
@@ -345,6 +453,7 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     check(st == 409 and codigo(b) == "es_invitado", "no se agrega biometría a un invitado sin consentimiento", (st, b))
     st, v = verify("sede-a", "img8.jpg")
     check(st == 404, "invitado excluido del reconocimiento", (st, v))
+    descartar("sede-a", v["detail"]["aviso"])
     st, sc = solicitud("sede-a", tok, "Carlos Nuevo", PERSONA_C[1:4])
     st2, sols = c.req("GET", "/solicitudes", token=ta)
     sc_id = next((x["id"] for x in sols if x["nombre_nino"] == "Carlos Nuevo"), None)
@@ -413,7 +522,8 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     print("\n== Retención (purga automática)")
     st, en3 = c.req("POST", "/inscripcion/enlaces", token=ta, data={"dias": "3"})
     st, s_old = solicitud("sede-a", en3["token"], "Vieja Uno", PERSONA_B[3:5])
-    st, v = verify("sede-a", GRUPO)  # caras desconocidas -> pendiente
+    st2, pend = c.req("GET", "/pendientes", token=ta)
+    check([p["id"] for p in pend] == [p_abandono], "queda el pendiente del abandono antes de la purga", pend)
     with sqlite3.connect(db_a) as conn:
         viejo = (datetime.now() - timedelta(days=31)).isoformat(sep=" ", timespec="seconds")
         conn.execute("UPDATE solicitudes SET creado_en = ?", (viejo,))
@@ -455,6 +565,27 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     check(codigos[:12] == [400] * 12 and codigos[12] == 429, "rate limit por token", codigos)
     codigos = [solicitud("sede-a", "y" * 43, "Limite Dos", [])[0] for _ in range(18)]
     check(429 in codigos and codigos[-1] == 429, "rate limit por IP", codigos)
+    # Hasta aquí van 8 avisos y 3 descartes desde esta IP (límites de prueba: 14 y 10 por IP).
+    cods = [aviso("sede-a", "inventado-" * 3, "nuevo")[0] for _ in range(8)]
+    check(cods == [404] * 6 + [429] * 2, "rate limit de /verify/aviso por IP (respuestas genéricas)", cods)
+    cods = [descartar("sede-b", "inventado-" * 3)[0] for _ in range(10)]
+    check(cods == [200] * 7 + [429] * 3, "rate limit de /verify/descartar por IP (respuesta genérica)", cods)
+
+    print("\n== Marcar a mano (staff) en la sede B")
+    st, b = c.req("POST", "/enroll", token=tb, data={"nombre": "Bruno Be", "consentimiento": "true",
+                                                      "tutor": "Tutor B", "categoria": "Sub-10"},
+                  files=[("files", (n, F[n], "image/jpeg")) for n in PERSONA_B[:2]])
+    check(st == 200, "inscribir jugador en B", (st, b))
+    id_bb = b.get("id")
+    st, sa = c.req("GET", "/jugadores/sin-asistencia-hoy", token=tb)
+    check([j["id"] for j in sa] == [id_bb], "sin-asistencia-hoy de B solo ve a B", sa)
+    st, b = c.req("POST", "/asistencia/manual", data={"jugador_id": str(id_bb)}, sede="sede-b")
+    check(st == 401, "/asistencia/manual sin token staff -> 401", (st, b))
+    st, b = c.req("POST", "/asistencia/manual", token=tb, data={"jugador_id": str(id_bb)})
+    st2, asis = c.req("GET", "/asistencias", token=tb, params={"hoy": "true"})
+    st3, sa = c.req("GET", "/jugadores/sin-asistencia-hoy", token=tb)
+    check(st == 200 and b["ya_registrado"] is False and [a["origen"] for a in asis] == ["manual"] and sa == [],
+          "marcar a mano registra origen 'manual' y sale de sin-asistencia-hoy", (b, asis, sa))
 
 
 def main() -> int:

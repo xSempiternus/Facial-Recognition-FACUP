@@ -3,9 +3,10 @@
 - enlaces de inscripción para los padres (solo se guarda el hash del token),
 - solicitudes de inscripción pendientes (embeddings + una miniatura; nunca las fotos originales),
 - consentimientos (evidencia: versión y hash del texto, tutor, contacto, fecha, hash de la IP),
-- pendientes del kiosko (llegadas no reconocidas y reportes "No soy yo"),
+- pendientes del kiosko (llegadas no reconocidas, niños nuevos y reportes "No soy yo"),
 - estados de asistencia (valida | disputada | anulada) e invitados,
-- auditoría mínima (sin datos biométricos; solo ids y acciones).
+- auditoría mínima (sin datos biométricos; solo ids y acciones),
+- tours/tutoriales ya vistos por el staff de la sede (preferencias de la UI, sin datos personales).
 
 Retenciones: solicitudes 30 días, pendientes 7 días (purga automática).
 """
@@ -19,6 +20,10 @@ RETENCION_PENDIENTES_DIAS = 7
 MAX_PENDIENTES = 100
 MAX_AUDITORIA = 200
 ESTADOS_ASISTENCIA = ("valida", "disputada", "anulada")
+# no_reconocido: el kiosko no reconoció (avisó "soy entrenador" o abandonó); nino_nuevo: avisó "soy nuevo";
+# no_soy_yo: el kiosko reconoció a otro niño.
+MOTIVOS_PENDIENTE = ("no_reconocido", "no_soy_yo", "nino_nuevo")
+MAX_NOVEDADES = 20
 _SIN_CAMBIO = object()
 _ALFABETO_CODIGO = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
@@ -88,6 +93,12 @@ _ESQUEMA = [
         motivo TEXT NOT NULL DEFAULT 'no_reconocido',
         disputa_de_jugador_id INTEGER,
         asistencia_id INTEGER
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS staff_tours (
+        tour_id TEXT PRIMARY KEY,
+        visto_en DATETIME NOT NULL
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_asistencia_jugador_ts ON asistencia (jugador_id, timestamp)",
@@ -298,6 +309,8 @@ class FlujosDB:
     def crear_pendiente(self, timestamp: str, embedding: list[float], modelo: str, miniatura: bytes,
                         sugerido_id: int | None, similitud: float | None, motivo: str = "no_reconocido",
                         disputa_de: int | None = None, asistencia_id: int | None = None) -> int:
+        if motivo not in MOTIVOS_PENDIENTE:
+            raise ValueError(f"motivo de pendiente inválido: {motivo}")
         with self.conexion() as conn:
             cur = conn.execute(
                 "INSERT INTO pendientes (timestamp, embedding, modelo, miniatura, sugerido_id, similitud, motivo, "
@@ -318,6 +331,16 @@ class FlujosDB:
                 "SELECT id, timestamp, modelo, miniatura, sugerido_id, similitud, motivo, disputa_de_jugador_id, "
                 "asistencia_id FROM pendientes ORDER BY id DESC").fetchall()
         return [dict(r) for r in rows]
+
+    def novedades_pendientes(self, desde: int, limite: int = MAX_NOVEDADES) -> dict:
+        """Lo que consulta el staff cada pocos segundos: {ultimo_id, total, nuevos (los más recientes con id > desde,
+        del más nuevo al más antiguo, máx. `limite`)}. Sin embeddings."""
+        with self.conexion() as conn:
+            total, max_id = conn.execute("SELECT COUNT(*), coalesce(MAX(id), 0) FROM pendientes").fetchone()
+            rows = conn.execute(
+                "SELECT id, timestamp, motivo, miniatura, sugerido_id, similitud, disputa_de_jugador_id "
+                "FROM pendientes WHERE id > ? ORDER BY id DESC LIMIT ?", (desde, limite)).fetchall() if max_id > desde else []
+        return {"ultimo_id": max(desde, max_id), "total": total, "nuevos": [dict(r) for r in rows]}
 
     def obtener_pendiente(self, pid: int) -> dict | None:
         with self.conexion() as conn:
@@ -358,6 +381,20 @@ class FlujosDB:
         if viejos:
             self.limpiar_wal()
         return len(viejos)
+
+    # ------------------------------------------------------------ preferencias del staff (tours vistos)
+
+    def tours_vistos(self) -> list[str]:
+        with self.conexion() as conn:
+            return [r[0] for r in conn.execute("SELECT tour_id FROM staff_tours ORDER BY visto_en, tour_id")]
+
+    def marcar_tour(self, tour_id: str) -> None:
+        with self.conexion() as conn:
+            conn.execute("INSERT OR IGNORE INTO staff_tours (tour_id, visto_en) VALUES (?, ?)", (tour_id, _now()))
+
+    def reiniciar_tours(self) -> int:
+        with self.conexion() as conn:
+            return conn.execute("DELETE FROM staff_tours").rowcount
 
     # ------------------------------------------------------------ estados de asistencia
 
@@ -401,6 +438,20 @@ class FlujosDB:
             return True
 
     # ------------------------------------------------------------ invitados y edición de jugadores
+
+    def sin_asistencia_hoy(self) -> list[dict]:
+        """Jugadores ACTIVOS sin asistencia válida hoy, por categoría (orden de la sede) y nombre. Sin biometría."""
+        hoy = datetime.now().date().isoformat()
+        with self.conexion() as conn:
+            rows = conn.execute(
+                "SELECT j.id, j.nombre, j.categoria FROM jugadores j "
+                "LEFT JOIN categorias c ON c.nombre = j.categoria "
+                "WHERE coalesce(j.estado, 'activo') = 'activo' AND NOT EXISTS ("
+                "  SELECT 1 FROM asistencia a WHERE a.jugador_id = j.id AND date(a.timestamp) = ? "
+                "  AND a.estado = 'valida') "
+                "ORDER BY j.categoria IS NULL, coalesce(c.orden, 999999), j.categoria COLLATE NOCASE, "
+                "j.nombre COLLATE NOCASE, j.id", (hoy,)).fetchall()
+        return [dict(r) for r in rows]
 
     def insert_invitado(self, nombre: str, categoria: str | None) -> int:
         """Jugador 'invitado': sin biometría (embedding vacío, sin fotos), excluido del reconocimiento."""

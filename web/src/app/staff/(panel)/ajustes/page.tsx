@@ -1,11 +1,33 @@
 "use client";
 
-import { Download, FlaskConical, Save, ShieldCheck } from "lucide-react";
+import { CircleHelp, Download, FlaskConical, Save, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { Actividad } from "@/components/staff/Actividad";
 import { Categorias } from "@/components/staff/Categorias";
+import { reiniciarTours } from "@/components/staff/Tour";
 import { Alerta, Badge, Button, Campo, Dialogo, ErrorCarga, PageHeader, SkeletonRows, Vacio, useQuery, useToast } from "@/components/staff/ui";
-import { ApiError, api, descargarRespaldo, type Config } from "@/lib/staff-api";
+import { ApiError, api, descargarRespaldo, textoError, type Config } from "@/lib/staff-api";
+
+function VerGuias() {
+  const notificar = useToast();
+  const [trabajando, setTrabajando] = useState(false);
+  async function reiniciar() {
+    setTrabajando(true);
+    try {
+      await reiniciarTours();
+      notificar("Listo: las guías vuelven a estar nuevas. Ábrelas con el botón «?» de cada pantalla.");
+    } catch (e) {
+      notificar(textoError(e, "No se pudo reiniciar las guías."), "err");
+    } finally {
+      setTrabajando(false);
+    }
+  }
+  return (
+    <Button sm variante="ghost" cargando={trabajando} onClick={reiniciar}>
+      {!trabajando && <CircleHelp size={14} aria-hidden />} Volver a ver las guías
+    </Button>
+  );
+}
 
 export default function Ajustes() {
   const cfg = useQuery(api.config);
@@ -17,7 +39,9 @@ export default function Ajustes() {
   const con = (jug.data ?? []).filter((j) => j.estado !== "invitado" && j.tiene_consentimiento).length;
   return (
     <>
-      <PageHeader titulo="Ajustes" descripcion="Configuración del reconocimiento, respaldos y privacidad." />
+      <PageHeader titulo="Ajustes" descripcion="Configuración del reconocimiento, respaldos y privacidad.">
+        <VerGuias />
+      </PageHeader>
       {cfg.data ? <Reconocimiento key={JSON.stringify(cfg.data)} cfg={cfg.data} total={jug.data?.length ?? 0} onGuardado={cfg.reload} /> : <div className="s-card"><SkeletonRows n={5} /></div>}
       <Categorias />
       <Respaldos query={resp} />

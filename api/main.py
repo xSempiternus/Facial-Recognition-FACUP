@@ -2,8 +2,9 @@
 
 Cada sede tiene su propia base, configuración, respaldos, caché de jugadores y pendientes (ver src/sedes.py).
 - Endpoints STAFF: la sede sale SOLO del claim `sede` del token firmado (un token jamás abre otra sede).
-- Endpoints públicos (/verify, /verify/no-soy-yo, /kiosko/resumen, /sedes/{slug}, /inscripcion*): header `X-Sede`
-  (o `?sede=`); sin él, DEFAULT_SEDE.
+- Endpoints públicos (/verify, /verify/no-soy-yo, /verify/aviso, /verify/descartar, /kiosko/resumen, /sedes/{slug},
+  /inscripcion*): header `X-Sede` (o `?sede=`); sin él, DEFAULT_SEDE. Ninguno registra asistencia sin un
+  reconocimiento válido: el veredicto final siempre es del staff.
 Módulos: api/nucleo.py (estado por sede), api/inscripcion.py (enlaces + solicitudes de los padres),
 api/revision.py (pendientes, "No soy yo", invitados, anulaciones, auditoría), api/consentimiento.py (texto).
 """
@@ -39,6 +40,20 @@ MARGEN_VERIFICACION_RAPIDA = 0.05
 REQUIERE_CONSENTIMIENTO = os.getenv("REQUIRE_CONSENT", "1") != "0"
 # Cada cuánto se revisa si ya existe el respaldo automático del día (de cada sede) y se purgan retenciones.
 INTERVALO_RESPALDO_S = 3600
+# Cada cuánto se convierten en pendiente las capturas no reconocidas vencidas (ver nucleo.AVISO_TTL_S).
+INTERVALO_AVISOS_S = max(1, min(15, nucleo.AVISO_TTL_S // 2))
+
+
+async def _vencer_avisos():
+    """Capturas no reconocidas sin respuesta del kiosko: al vencer (3 min) pasan a pendiente 'abandono' aunque
+    nadie consulte (además de la purga perezosa en /pendientes*, /verify y /verify/aviso)."""
+    while True:
+        await asyncio.sleep(INTERVALO_AVISOS_S)
+        for s in list(nucleo._sedes.values()):
+            try:
+                await run_in_threadpool(s.vencer_avisos)
+            except Exception as exc:
+                print(f"[avisos:{s.slug}] error: {exc}")
 
 
 async def _respaldo_diario():
@@ -91,11 +106,18 @@ async def lifespan(app: FastAPI):
     await run_in_threadpool(_warmup, cargadas)
     nucleo.loop = asyncio.get_running_loop()
     tarea = asyncio.create_task(_respaldo_diario())
+    avisos = asyncio.create_task(_vencer_avisos())
     nombres = sorted({n for s in cargadas for n in s.primeros_nombres()})
     voces = asyncio.create_task(precalentar_voz(nombres))  # caché de audio compartida: solo nombres de pila
     yield
     tarea.cancel()
+    avisos.cancel()
     voces.cancel()
+    for s in list(nucleo._sedes.values()):  # al apagar: lo que quede en memoria pasa a pendiente (no se pierde)
+        try:
+            s.vencer_avisos(todos=True)
+        except Exception:
+            log.exception("[%s] avisos al apagar", s.slug)
 
 
 # La documentación interactiva (/docs, /redoc, /openapi.json) queda apagada: no hay motivo para publicar el mapa de la API.
@@ -130,6 +152,7 @@ def health():
 @app.get("/health/detalle")
 def health_detalle(s: Sede = Depends(sede_staff)):
     compatibles = len(s.plantillas_actuales())
+    s.vencer_avisos()
     s.db.purgar_pendientes()
     return {
         "status": "ok",
@@ -324,25 +347,26 @@ async def enroll(
 @app.post("/verify")
 async def verify(file: UploadFile = File(...), s: Sede = Depends(sede_publica)):
     """Público. Compara SOLO contra los jugadores de la sede del header X-Sede (o ?sede=, o la por defecto)."""
-    plantillas = s.plantillas_actuales()
-    if not plantillas:
+    if s.matriz_plantillas()[1] is None:
         _error(404, "sin_jugadores", "No hay jugadores inscritos todavía.")
 
     umbral = s.umbral()
     antispoofing = s.config.get("antispoofing", False)
     # Camino rápido: solo se acepta si el parecido es claramente alto; si no, se confirma con el de referencia.
+    # (Si el camino rápido ya cayó solo al de referencia, `face["rapido"]` es False y no se repite el mismo análisis.)
     face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, rapido=True, publico=True)
-    jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=umbral)
-    if s.config["detector"] == "retinaface" and not antispoofing and (
-            jugador_id is None or score < umbral + MARGEN_VERIFICACION_RAPIDA):
+    jugador_id, score = s.buscar(face["embedding"])
+    if face.get("rapido") and (jugador_id is None or score < umbral + MARGEN_VERIFICACION_RAPIDA):
         face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, publico=True)
-        jugador_id, score = cv_engine.find_match(face["embedding"], plantillas, threshold=umbral)
+        jugador_id, score = s.buscar(face["embedding"])
 
     jugador = s.jugadores.get(jugador_id) if jugador_id is not None else None
     if jugador is None:
-        # Queda (persistente, 7 días) para que el staff de esta sede indique quién era.
-        await run_in_threadpool(s.nuevo_pendiente, face["embedding"], face.get("miniatura") or b"")
-        _error(404, "no_reconocido", "Jugador no reconocido.")
+        # NO crea pendiente: la captura queda en memoria (3 min, un solo uso) bajo `aviso`. El kiosko decide con
+        # /verify/aviso (entrenador | nuevo | abandono) o /verify/descartar (reintento); si no dice nada, al vencer
+        # pasa sola a pendiente. Así un niño que reintenta no llena la cola del staff.
+        aviso = await run_in_threadpool(s.crear_aviso, face, s.mejor_candidato(face["embedding"]))
+        _error(404, "no_reconocido", "Jugador no reconocido.", aviso=aviso)
 
     registrado_a_las = s.db.asistio_hoy(jugador_id)
     asistencia_id = s.db.registrar_asistencia(jugador_id) if registrado_a_las is None else None
@@ -362,7 +386,8 @@ async def verify(file: UploadFile = File(...), s: Sede = Depends(sede_publica)):
 
 @app.post("/asistencia/manual")
 def asistencia_manual(jugador_id: int = Form(...), s: Sede = Depends(sede_staff)):
-    """Respaldo para cuando el reconocimiento falla: el staff marca al niño a mano."""
+    """STAFF. Respaldo para cuando el reconocimiento falla: el staff marca al niño a mano (origen 'manual').
+    Es el veredicto del staff: el kiosko público nunca llega aquí."""
     if jugador_id not in s.jugadores:
         _error(404, "no_existe", "El jugador no existe.")
     registrado_a_las = s.db.asistio_hoy(jugador_id)
@@ -370,6 +395,43 @@ def asistencia_manual(jugador_id: int = Form(...), s: Sede = Depends(sede_staff)
         s.db.registrar_asistencia(jugador_id, origen="manual")
     return {"status": "success", "nombre": s.jugadores[jugador_id]["nombre"],
             "ya_registrado": registrado_a_las is not None}
+
+
+@app.get("/jugadores/sin-asistencia-hoy")
+def sin_asistencia_hoy(s: Sede = Depends(sede_staff)):
+    """Para marcar a mano rápido: activos (no invitados) sin asistencia válida hoy, por categoría y nombre.
+    [{id, nombre, categoria}] (sin miniaturas ni biometría)."""
+    return s.db.sin_asistencia_hoy()
+
+
+@app.get("/staff/preferencias")
+def staff_preferencias(s: Sede = Depends(sede_staff)):
+    """Preferencias de la UI del staff, compartidas por la sede (no dependen del origen/túnel del navegador)."""
+    return {"tours_vistos": s.db.tours_vistos()}
+
+
+_TOUR_ID = re.compile(r"^[a-z0-9-]{1,40}$")
+MAX_TOURS = 200
+
+
+@app.post("/staff/tours/{tour_id}")
+def staff_marcar_tour(tour_id: str, s: Sede = Depends(sede_staff)):
+    """Marca un tour como visto (idempotente)."""
+    if not _TOUR_ID.match(tour_id):
+        _error(400, "tour_invalido", "Id de tour inválido (1-40 caracteres: a-z, 0-9, -).")
+    vistos = s.db.tours_vistos()
+    if tour_id not in vistos:
+        if len(vistos) >= MAX_TOURS:
+            _error(400, "demasiados_tours", "Demasiados tours registrados; reinícialos.")
+        s.db.marcar_tour(tour_id)
+        vistos.append(tour_id)
+    return {"tours_vistos": vistos}
+
+
+@app.delete("/staff/tours")
+def staff_reiniciar_tours(s: Sede = Depends(sede_staff)):
+    s.db.reiniciar_tours()
+    return {"tours_vistos": []}
 
 
 @app.get("/jugadores")

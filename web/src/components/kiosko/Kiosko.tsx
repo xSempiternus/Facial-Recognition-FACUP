@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { abrirCamara, contarCamaras, facingInicial, guardarFacing, type Facing } from "@/lib/camara";
 import { iniciarSonidos, sonar } from "@/lib/sonidos";
 import { desbloquearVoz, hablar, type Frase } from "@/lib/voz";
-import { llegadasDeHoy, noSoyYo, precalentar, verificar, type Verificacion } from "@/lib/api";
+import { avisarEntrenador, descartarAviso, llegadasDeHoy, noSoyYo, precalentar, verificar, type TipoAviso, type Verificacion } from "@/lib/api";
 import { calidadActual, iniciarCalidad, restriccionesCamara, useCalidad } from "./calidad";
 import Aurora, { type ModoAurora } from "./Aurora";
 import Insignia from "./Insignia";
@@ -26,15 +26,22 @@ import Tarjeta, { type TextoTarjeta } from "./Tarjeta";
 import { k } from "./tiempo";
 import { capturarFoto, useRastreoCara, type Desvio, type Objetivo, type Postura } from "./useRastreoCara";
 
-const MOSTRAR_RESULTADO_MS = 4200;
+const MOSTRAR_RESULTADO_MS = 2500; // éxito sin botón "¿No eres tú?" (p. ej. backend viejo)
+const YA_REGISTRADO_MS = 1800; // "ya registrado": sobrio y corto
+const VENTANA_NO_ERES_TU_MS = 4000; // éxito nuevo con "¿No eres tú?" visible: el resultado dura al menos esto, para que el botón no desaparezca antes
+const AVISO_MS = 4200; // avisos leves (sin cara, foto, sin conexión) y errores: hay que poder leerlos
 const GRACIAS_MS = 2800; // tras "¿No eres tú?", el mensaje de gracias queda visible este tiempo
-const ESPERA_MISMO_NIÑO_MS = 6000; // tras un resultado, no vuelve a escanear a quien sigue frente a la cámara
+const AYUDA_CONFIRMADA_MS = 3500; // "Listo, un entrenador te ayudará": queda visible este tiempo y se vuelve a escanear
+const ABANDONO_MS = 20_000; // "No te reconocimos" sin tocar nada: se envía aviso "abandono" y se vuelve al flujo normal
+const ESPERA_MISMO_NIÑO_MS = 4000; // tras un resultado, no vuelve a escanear a quien sigue frente a la cámara: 4 s o hasta que salga del encuadre
 const EASE = [0.22, 1, 0.36, 1] as const;
 const ESCRITORIO_DESDE = 900; // ancho (px) desde el que la cámara va en un escenario centrado
 
 type Resultado = TextoTarjeta & {
   tono: "exito" | "aviso" | "error";
   sobrio?: boolean; // "ya registrado"
+  noReconocido?: boolean; // pantalla "No te reconocimos" (con acciones)
+  aviso?: string; // referencia del backend para avisar/descartar; sin ella (backend viejo) solo hay "Reintentar"
 };
 
 // Saludos de jugador: uno por llegada, para que no suene siempre igual.
@@ -123,7 +130,7 @@ function aResultado(v: Verificacion): { resultado: Resultado; frase: Frase | nul
     case "foto_falsa":
       return { resultado: { tono: "aviso", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara" }, frase: { texto: "Usa tu cara, no una foto.", tipo: "foto" } };
     case "no_reconocido":
-      return { resultado: { tono: "aviso", titulo: "No te reconocimos", sub: "Intenta de nuevo o avisa a tu entrenador" }, frase: { texto: "No te reconocimos. Intenta de nuevo o avisa a tu entrenador.", tipo: "no_reconocido" } };
+      return { resultado: { tono: "aviso", noReconocido: true, aviso: v.aviso, titulo: "No te reconocimos", sub: v.aviso ? "Puedes intentarlo otra vez o pedir ayuda" : "Intenta de nuevo o avisa a tu entrenador" }, frase: { texto: "No te reconocimos. Intenta de nuevo o avisa a tu entrenador.", tipo: "no_reconocido" } };
     case "sin_conexion":
       return { resultado: { tono: "aviso", titulo: "Sin conexión", sub: "Revisa tu internet e intenta de nuevo" }, frase: null };
     case "sin_jugadores":
@@ -133,7 +140,7 @@ function aResultado(v: Verificacion): { resultado: Resultado; frase: Frase | nul
   }
 }
 
-// Vista previa de estados para diseño/QA: ?demo=buscando|alinear|lejos|escaneando|verificando|pocaluz|contraluz|reconocido|ya|noreconoce|sinrostro|error|camara|denegada.
+// Vista previa de estados para diseño/QA: ?demo=buscando|alinear|lejos|escaneando|verificando|pocaluz|contraluz|reconocido|ya|fallo|noreconoce|sinrostro|error|camara|denegada.
 // Solo existe fuera de producción; en producción el parámetro se ignora.
 const suscribirNada = () => () => {};
 const demoActual = () => (process.env.NODE_ENV === "production" ? "" : new URLSearchParams(window.location.search).get("demo") ?? "");
@@ -143,7 +150,8 @@ function useDemo() {
 const DEMO_VERIFICACION: Record<string, Verificacion> = {
   reconocido: { ok: true, nombre: "Matías Soto", categoria: "Sub-10", yaRegistrado: false, registradoALas: null, similitud: 0.9 },
   ya: { ok: true, nombre: "Matías Soto", categoria: "Sub-10", yaRegistrado: true, registradoALas: "2026-10-28T09:12:00", similitud: 0.9 },
-  noreconoce: { ok: false, codigo: "no_reconocido", mensaje: "" },
+  fallo: { ok: false, codigo: "no_reconocido", mensaje: "", aviso: "demo" }, // con acciones de ayuda
+  noreconoce: { ok: false, codigo: "no_reconocido", mensaje: "" }, // backend viejo: solo Reintentar
   sinrostro: { ok: false, codigo: "sin_rostro", mensaje: "" },
   error: { ok: false, codigo: "error_servidor", mensaje: "" },
 };
@@ -199,6 +207,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const [fotoUrl, setFotoUrl] = useState<string | null>(null); // foto capturada, para mostrarla nítida a pantalla completa
   const [reporte, setReporte] = useState<string | null>(null); // token de un solo uso de /verify para "¿No eres tú?"
   const [estadoReporte, setEstadoReporte] = useState<"libre" | "enviando" | "enviado" | "limite" | "red">("libre");
+  const [ayuda, setAyuda] = useState<"libre" | "enviando" | "entrenador" | "nuevo" | "limite" | "red">("libre"); // "No te reconocimos"
   const [repetir, setRepetir] = useState(0); // solo demo: tocar la pantalla repite la secuencia
   const voz = useRef(true);
   const prueba = useRef(false);
@@ -389,6 +398,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     }
     setReporte(v.ok && !v.yaRegistrado ? (v.reporte ?? null) : null);
     setEstadoReporte("libre");
+    setAyuda("libre");
     setResultado(resultado);
     setFase("resultado");
     if (frase && voz.current) hablar(frase);
@@ -471,20 +481,55 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const hoyMostrado = enDemo ? demoHoy : hoy;
 
   // Fin del resultado: vuelve a escanear, pero espera a que el niño se vaya (o pasen unos segundos).
-  const terminarResultado = useCallback(() => {
+  // `ahora`: reintento manual, escanea al instante (sin esperar a que el niño salga del encuadre).
+  const terminarResultado = useCallback((ahora = false) => {
     setResultado(null);
     setReporte(null);
     setEstadoReporte("libre");
+    setAyuda("libre");
     setFase("escaneando");
-    setEsperarSalida(true);
+    setEsperarSalida(!ahora);
   }, []);
+  const avisoActual = resultado?.aviso;
   useEffect(() => {
-    // Mientras se envía el aviso el resultado se queda; al terminar, el mensaje de gracias dura GRACIAS_MS y se sigue.
-    if (fase !== "resultado" || prueba.current || estadoReporte === "enviando") return;
-    const ms = estadoReporte === "enviado" || estadoReporte === "limite" ? GRACIAS_MS : MOSTRAR_RESULTADO_MS;
-    const id = setTimeout(terminarResultado, ms);
+    // Mientras se envía un aviso el resultado se queda; luego el mensaje de gracias / ayuda dura un rato y se sigue.
+    if (enDemo || fase !== "resultado" || prueba.current || estadoReporte === "enviando" || ayuda === "enviando") return;
+    const r = resultadoReal;
+    const confirmada = ayuda === "entrenador" || ayuda === "nuevo" || ayuda === "limite";
+    let ms: number;
+    if (confirmada) ms = AYUDA_CONFIRMADA_MS;
+    else if (r?.noReconocido) ms = ABANDONO_MS;
+    else if (r?.tono === "exito") {
+      if (estadoReporte === "enviado" || estadoReporte === "limite") ms = GRACIAS_MS;
+      else if (r.sobrio) ms = YA_REGISTRADO_MS;
+      else ms = reporte ? VENTANA_NO_ERES_TU_MS : MOSTRAR_RESULTADO_MS;
+    } else ms = AVISO_MS;
+    const id = setTimeout(() => {
+      // Sin tocar nada en "No te reconocimos": el staff recibe un aviso "abandono" (sin nombre) y el kiosko sigue.
+      if (!confirmada && r?.noReconocido && avisoActual && !enDemo) void avisarEntrenador(avisoActual, "abandono");
+      terminarResultado();
+    }, ms);
     return () => clearTimeout(id);
-  }, [fase, terminarResultado, estadoReporte]);
+  }, [fase, terminarResultado, estadoReporte, ayuda, resultadoReal, reporte, avisoActual, enDemo]);
+
+  // "Reintentar": reinicia el escaneo al instante y descarta el aviso pendiente.
+  const reintentarAhora = useCallback(() => {
+    if (avisoActual && !enDemo) descartarAviso(avisoActual);
+    terminarResultado(true);
+  }, [avisoActual, enDemo, terminarResultado]);
+  // "Avisar a mi entrenador" / "Soy nuevo": crea el pendiente para el staff (nunca registra asistencia).
+  const pedirAyuda = useCallback(
+    async (tipo: Exclude<TipoAviso, "abandono">) => {
+      if (!avisoActual || ayuda === "enviando") return;
+      setAyuda("enviando");
+      const r = enDemo ? "ok" : await avisarEntrenador(avisoActual, tipo);
+      if (r === "ok") {
+        setAyuda(tipo);
+        sonar("aviso");
+      } else setAyuda(r === "limite" ? "limite" : "red");
+    },
+    [avisoActual, ayuda, enDemo],
+  );
 
   // "¿No eres tú?": un toque avisa al staff con el reporte de un solo uso. Respuesta genérica; 429 = mensaje amable.
   const avisarNoSoyYo = useCallback(async () => {
@@ -497,11 +542,20 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
       sonar("aviso");
     } else setEstadoReporte(r);
   }, [reporte, estadoReporte]);
+  // Espera tras un resultado: termina al salir del encuadre o a los ESPERA_MISMO_NIÑO_MS, lo que ocurra primero
+  // (el plazo corre una sola vez: los cambios de postura ya no lo reinician).
+  const salioDelEncuadre = postura === "sin-cara";
+  const inicioEspera = useRef(0);
   useEffect(() => {
     if (!esperarSalida) return;
-    const id = setTimeout(() => setEsperarSalida(false), postura === "sin-cara" ? 0 : ESPERA_MISMO_NIÑO_MS);
+    if (!inicioEspera.current) inicioEspera.current = performance.now();
+    const resta = salioDelEncuadre ? 0 : Math.max(0, ESPERA_MISMO_NIÑO_MS - (performance.now() - inicioEspera.current));
+    const id = setTimeout(() => setEsperarSalida(false), resta);
     return () => clearTimeout(id);
-  }, [esperarSalida, postura]);
+  }, [esperarSalida, salioDelEncuadre]);
+  useEffect(() => {
+    if (!esperarSalida) inicioEspera.current = 0;
+  }, [esperarSalida]);
 
   const sinCamara = enDemo ? demo === "camara" || demo === "denegada" : Boolean(errorCamara);
   const camaraDenegada = enDemo ? demo === "denegada" : Boolean(errorCamara?.startsWith("Permiso de cámara denegado"));
@@ -556,16 +610,28 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   }, [resultado, resultadoVisible]);
 
   // Texto de arriba (guía) y tarjeta de abajo (resultado).
+  const ayudaConfirmada = ayuda === "entrenador" || ayuda === "nuevo";
+  const ayudaTexto: TextoTarjeta | null =
+    ayuda === "entrenador"
+      ? { titulo: "Listo, un entrenador te ayudará", sub: "Puedes esperar aquí cerca" }
+      : ayuda === "nuevo"
+        ? { titulo: "Un entrenador te ayudará a inscribirte", sub: "Puedes esperar aquí cerca" }
+        : ayuda === "limite"
+          ? { titulo: "Hay muchos avisos ahora", sub: "Avisa a tu entrenador" }
+          : ayuda === "red"
+            ? { titulo: "No pudimos avisar", sub: "Toca otra vez o avisa a tu entrenador" }
+            : null;
   const cartaTexto: TextoTarjeta | null = sinCamara
     ? camaraDenegada
       ? { titulo: "Cámara bloqueada", sub: "Permite el acceso a la cámara en los ajustes del navegador y toca Reintentar." }
       : { titulo: "Cámara no disponible", sub: errorCamara ?? "Revisa la cámara y toca Reintentar." }
     : resultadoVisible
-      ? resultado
+      ? (ayudaTexto ?? resultado)
       : null;
   let arriba: { titulo: string; sub: string };
   if (sinCamara) arriba = camaraDenegada ? { titulo: "Activa la cámara", sub: "Necesitamos verte para registrar tu llegada" } : { titulo: "Hay un problema", sub: "Avisa al staff" };
   else if (resultadoVisible && tono === "error") arriba = { titulo: "Hay un problema", sub: "Avisa al staff" };
+  else if (resultadoVisible && ayudaConfirmada) arriba = { titulo: "Aviso enviado", sub: "Ya lo sabe el staff" };
   else if (resultadoVisible && tono === "aviso") arriba = { titulo: "Intenta de nuevo", sub: "Mira de frente, con buena luz" };
   else if (exito) arriba = sobrio ? { titulo: "Ya estabas registrado", sub: "Tu llegada de hoy ya estaba lista" } : { titulo: "¡Llegada registrada!", sub: "Bienvenido a FA CUP" };
   else if (reintentandoRed && fase === "enviando") arriba = { titulo: "Sin conexión, reintentando…", sub: "No te muevas" };
@@ -616,7 +682,10 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
         className="relative flex h-dvh w-full items-center justify-center overflow-hidden bg-fondo"
         onClick={() => {
           if (resultadoVisible && prueba.current) terminarResultado();
-          else if (enDemo) setRepetir((n) => n + 1);
+          else if (enDemo) {
+            setAyuda("libre");
+            setRepetir((n) => n + 1);
+          }
         }}
       >
         {/* Escritorio: aurora y vidrio alrededor del escenario. En teléfono la cámara lo cubre todo. */}
@@ -765,9 +834,9 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
                   transition={{ type: "spring", stiffness: 160, damping: 24, delay: (exito ? 0.4 : 0.1) * T }}
                 >
                   <div className="absolute left-1/2 top-0 z-10 -translate-x-1/2">
-                    <Insignia tipo={hayError && tono !== "aviso" ? "error" : tono === "aviso" ? "aviso" : sobrio ? "ya" : "exito"} lado={56} />
+                    <Insignia tipo={ayudaConfirmada ? "ya" : hayError && tono !== "aviso" ? "error" : tono === "aviso" ? "aviso" : sobrio ? "ya" : "exito"} lado={56} />
                   </div>
-                  <Tarjeta texto={cartaTexto} tono={hayError ? "error" : tono} sobrio={sobrio} resultado={resultadoVisible} insignia />
+                  <Tarjeta texto={cartaTexto} tono={hayError ? "error" : ayudaConfirmada ? "exito" : tono} sobrio={sobrio || ayudaConfirmada} resultado={resultadoVisible} insignia />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -786,6 +855,30 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
                   <button type="button" className="reco-salir !min-h-[44px] !bg-white/10 !text-[0.9rem] !font-medium" disabled={estadoReporte === "enviando"} onClick={() => void avisarNoSoyYo()}>
                     {estadoReporte === "enviando" ? "Enviando…" : estadoReporte === "red" ? "Sin conexión, toca para reintentar" : "¿No eres tú?"}
                   </button>
+                )}
+              </div>
+            )}
+            {/* "No te reconocimos" y avisos leves: acciones grandes. Alto fijo: la confirmación no mueve nada. */}
+            {resultadoVisible && resultado?.tono === "aviso" && !sinCamara && (
+              <div
+                className="reco-fallo"
+                data-solo={resultado.noReconocido && resultado.aviso ? undefined : ""}
+                inert={ayudaConfirmada || ayuda === "limite" ? true : undefined}
+                aria-hidden={ayudaConfirmada || ayuda === "limite" ? true : undefined}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button type="button" className="reco-fallo-principal" onClick={reintentarAhora}>
+                  Reintentar
+                </button>
+                {resultado.noReconocido && resultado.aviso && (
+                  <div className="reco-fallo-sec">
+                    <button type="button" className="reco-fallo-btn" disabled={ayuda === "enviando"} onClick={() => void pedirAyuda("entrenador")}>
+                      {ayuda === "enviando" ? "Avisando…" : "Avisar a mi entrenador"}
+                    </button>
+                    <button type="button" className="reco-fallo-btn" disabled={ayuda === "enviando"} onClick={() => void pedirAyuda("nuevo")}>
+                      Soy nuevo
+                    </button>
+                  </div>
                 )}
               </div>
             )}

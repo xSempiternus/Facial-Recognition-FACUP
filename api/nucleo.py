@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import io
 import logging
+import os
 import secrets
 import threading
 import time
@@ -13,6 +14,7 @@ from datetime import datetime
 
 from fastapi import Depends, Header, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
+import numpy as np
 from PIL import Image
 
 from api import auth
@@ -33,6 +35,19 @@ MARGEN_CORRECCION = 0.25
 # Reporte "No soy yo": id de un solo uso que vive 2 minutos en memoria con la captura de ese /verify.
 REPORTE_TTL_S = 120
 MAX_REPORTES = 500
+# Fallo de reconocimiento: la captura de un /verify no reconocido vive en memoria (un solo uso) bajo un `aviso`
+# aleatorio hasta que el kiosko diga qué pasó (/verify/aviso) o que el niño reintenta (/verify/descartar).
+# Si en AVISO_TTL_S no llega nada, se convierte sola en pendiente (abandono): ninguna llegada se pierde.
+# AVISO_TTL_S solo se puede ACORTAR por entorno (pruebas); nunca supera 3 minutos.
+AVISO_TTL_MAX_S = 180
+try:
+    AVISO_TTL_S = max(1, min(int(os.getenv("AVISO_TTL_S", AVISO_TTL_MAX_S)), AVISO_TTL_MAX_S))
+except ValueError:
+    AVISO_TTL_S = AVISO_TTL_MAX_S
+# Tope por sede; al superarlo, la captura más antigua pasa a pendiente (abandono) en vez de perderse.
+MAX_AVISOS = 200
+# tipo del aviso del kiosko -> motivo del pendiente
+MOTIVO_AVISO = {"entrenador": "no_reconocido", "abandono": "no_reconocido", "nuevo": "nino_nuevo"}
 
 
 def error(status: int, codigo: str, mensaje: str, **extra):
@@ -56,6 +71,11 @@ class Sede:
         self.jugadores: dict[int, dict] = {}
         # {reporte: {"t", "timestamp", "embedding", "modelo", "miniatura", "jugador_id", "asistencia_id"}}
         self.reportes: dict[str, dict] = {}
+        # {aviso: {"t", "timestamp", "embedding", "modelo", "miniatura", "sugerencia": (jugador_id, similitud)}}
+        self.avisos: dict[str, dict] = {}
+        # avisos ya resueltos {aviso: (t, "pendiente" | "descartado")} (idempotencia), viven AVISO_TTL_S
+        self.avisos_usados: dict[str, tuple[float, str]] = {}
+        self._matriz: tuple | None = None  # caché de plantillas (ver matriz_plantillas)
         self.lock = threading.RLock()
         self.db.init_db()
         self._sal = self.db.ip_sal().encode()
@@ -88,6 +108,55 @@ class Sede:
                 salida[jid] = embs
         return salida
 
+    def matriz_plantillas(self) -> tuple[list[int], "np.ndarray | None", "np.ndarray | None"]:
+        """(claves, matriz float32, normas) de las plantillas actuales, cacheada mientras no cambien.
+
+        Huella: modelo + por jugador (id, estado, id(lista de plantillas), largo). La caché retiene esas listas, así
+        que sus id() no se reutilizan mientras está viva: alta, baja, cambio de estado, foto agregada o recarga
+        cambian la huella. Mismas operaciones float32 que cv_engine.best_candidate (puntajes idénticos), sin
+        reconvertir miles de floats de Python en cada /verify."""
+        modelo = self.config["modelo"]
+        items = list(self.jugadores.items())
+        huella = (modelo, tuple((jid, d["estado"], id(d["plantillas"]), len(d["plantillas"])) for jid, d in items))
+        cache = self._matriz
+        if cache is not None and cache[0] == huella:
+            return cache[2], cache[3], cache[4]
+        claves, filas = [], []
+        for jid, d in items:
+            if d["estado"] != "activo":
+                continue
+            for m, e in d["plantillas"]:
+                if m == modelo:
+                    claves.append(jid)
+                    filas.append(e)
+        if filas:
+            mat = np.asarray(filas, dtype=np.float32)
+            normas = np.linalg.norm(mat, axis=1)
+        else:
+            mat = normas = None
+        self._matriz = (huella, [d["plantillas"] for _, d in items], claves, mat, normas)
+        return claves, mat, normas
+
+    def mejor_candidato(self, embedding, excluir: int | None = None) -> tuple[int | None, float]:
+        """Como cv_engine.best_candidate(embedding, plantillas_actuales()) pero con la matriz cacheada.
+        `excluir`: jugador que no puede ser candidato (disputas)."""
+        claves, mat, normas_m = self.matriz_plantillas()
+        if mat is not None and excluir is not None:
+            filas = [i for i, k in enumerate(claves) if k != excluir]
+            claves, mat, normas_m = [claves[i] for i in filas], mat[filas], normas_m[filas]
+        if mat is None or not claves:
+            return None, -1.0
+        t = np.asarray(embedding, dtype=np.float32)
+        normas = normas_m * np.linalg.norm(t)
+        puntajes = np.divide(mat @ t, normas, out=np.zeros(len(claves), np.float32), where=normas != 0)
+        i = int(puntajes.argmax())
+        return claves[i], float(puntajes[i])
+
+    def buscar(self, embedding) -> tuple[int | None, float]:
+        """Como cv_engine.find_match con el umbral de la sede: (jugador_id, similitud) o (None, mejor_similitud)."""
+        jid, score = self.mejor_candidato(embedding)
+        return (jid, score) if jid is not None and score > self.umbral() else (None, score)
+
     def agregar_plantilla(self, jugador_id: int, embedding: list[float], origen: str) -> None:
         modelo = self.config["modelo"]
         self.db.add_foto(jugador_id, embedding, modelo, origen)
@@ -99,7 +168,7 @@ class Sede:
                 self.jugadores[jugador_id]["plantillas"] = self.db.plantillas_de(jugador_id)
 
     def best_match(self, embedding: list[float]):
-        return cv_engine.find_match(embedding, self.plantillas_actuales(), threshold=self.umbral())
+        return self.buscar(embedding)
 
     def primeros_nombres(self) -> list[str]:
         return sorted({j["nombre"].split()[0] for j in self.jugadores.values() if j["nombre"].split()})
@@ -112,16 +181,74 @@ class Sede:
 
     def nuevo_pendiente(self, embedding: list[float], miniatura: bytes, timestamp: str | None = None,
                         motivo: str = "no_reconocido", disputa_de: int | None = None,
-                        asistencia_id: int | None = None) -> int:
-        plantillas = self.plantillas_actuales()
-        if disputa_de is not None:
-            plantillas.pop(disputa_de, None)  # sugerir a otro niño, no al que se reconoció por error
-        sugerido, sim = cv_engine.best_candidate(embedding, plantillas)
-        if sugerido is None or sim < self.umbral() - MARGEN_CORRECCION:
-            sugerido = None  # demasiado distinto: mejor no sugerir a nadie
-        return self.db.crear_pendiente(timestamp or ahora_ts(), embedding, self.config["modelo"], miniatura,
-                                       sugerido, float(sim) if sugerido is not None else None,
+                        asistencia_id: int | None = None, modelo: str | None = None,
+                        sugerencia: tuple[int | None, float] | None = None) -> int:
+        """`sugerencia` (jugador_id, similitud) ya calculada (avisos del kiosko); si no, se calcula aquí.
+        Con disputa_de se sugiere a otro niño, no al que se reconoció por error."""
+        sugerido, sim = sugerencia if sugerencia is not None else self.mejor_candidato(embedding, excluir=disputa_de)
+        if sugerido is None or sim < self.umbral() - MARGEN_CORRECCION or sugerido not in self.jugadores:
+            sugerido = None  # demasiado distinto (o ya no existe): mejor no sugerir a nadie
+        return self.db.crear_pendiente(timestamp or ahora_ts(), embedding, modelo or self.config["modelo"],
+                                       miniatura, sugerido, float(sim) if sugerido is not None else None,
                                        motivo, disputa_de, asistencia_id)
+
+    # ---------------------------------------------------------- avisos de fallo del kiosko (memoria, TTL 3 min)
+
+    def crear_aviso(self, face: dict, sugerencia: tuple[int | None, float]) -> str:
+        """Guarda la captura no reconocida bajo un id aleatorio de un solo uso. No crea pendiente todavía."""
+        token = secrets.token_urlsafe(18)
+        with self.lock:
+            self.avisos[token] = {"t": time.monotonic(), "timestamp": ahora_ts(), "embedding": face["embedding"],
+                                  "modelo": self.config["modelo"], "miniatura": face.get("miniatura") or b"",
+                                  "sugerencia": sugerencia}
+        self.vencer_avisos()
+        return token
+
+    def resolver_aviso(self, token: str, tipo: str | None) -> str:
+        """tipo None = descartar (el niño reintenta). Retorna 'ok' (resuelto ahora), 'repetido' (ya pasó a pendiente
+        hace menos de AVISO_TTL_S, por aviso o por vencimiento: idempotente, no hace nada) o 'no_existe' (inválido,
+        descartado o resuelto hace rato)."""
+        self.vencer_avisos()
+        with self.lock:
+            a = self.avisos.pop(token, None) if token else None
+            if a is None:
+                usado = self.avisos_usados.get(token) if token else None
+                return "repetido" if usado and usado[1] == "pendiente" else "no_existe"
+            self.avisos_usados[token] = (time.monotonic(), "pendiente" if tipo is not None else "descartado")
+        if tipo is not None:
+            self._aviso_a_pendiente(a, MOTIVO_AVISO[tipo])
+        return "ok"
+
+    def _aviso_a_pendiente(self, a: dict, motivo: str) -> int:
+        return self.nuevo_pendiente(a["embedding"], a["miniatura"], a["timestamp"], motivo=motivo,
+                                    modelo=a["modelo"], sugerencia=a["sugerencia"])
+
+    def vencer_avisos(self, todos: bool = False) -> int:
+        """Purga perezosa (al crear/resolver avisos, en cada consulta del staff a /pendientes* y cada
+        INTERVALO_AVISOS_S desde main): lo vencido o lo que excede MAX_AVISOS pasa a pendiente 'abandono'
+        (motivo no_reconocido) con la hora de la llegada."""
+        ahora = time.monotonic()
+        with self.lock:
+            if not self.avisos and not self.avisos_usados:
+                return 0
+            limite = ahora - AVISO_TTL_S
+            vencidos = [(k, v) for k, v in self.avisos.items() if todos or v["t"] < limite]
+            for k, _ in vencidos:
+                del self.avisos[k]
+            exceso = len(self.avisos) - MAX_AVISOS
+            if exceso > 0:
+                for k in sorted(self.avisos, key=lambda k: self.avisos[k]["t"])[:exceso]:
+                    vencidos.append((k, self.avisos.pop(k)))
+            for k in [k for k, (t, _) in self.avisos_usados.items() if t < limite]:
+                del self.avisos_usados[k]
+            for k, _ in vencidos:
+                self.avisos_usados[k] = (ahora, "pendiente")
+        for _, a in vencidos:
+            try:
+                self._aviso_a_pendiente(a, MOTIVO_AVISO["abandono"])
+            except Exception:
+                log.exception("[%s] no se pudo guardar una llegada no reconocida", self.slug)
+        return len(vencidos)
 
     # ---------------------------------------------------------- reportes "No soy yo" (solo memoria, TTL 2 min)
 

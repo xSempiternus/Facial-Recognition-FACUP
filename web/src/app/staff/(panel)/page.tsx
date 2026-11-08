@@ -4,6 +4,7 @@ import { ArrowRight, BellRing, CalendarCheck, Users } from "lucide-react";
 import Link from "next/link";
 import { NinoNuevo } from "@/components/staff/NinoNuevo";
 import { BotonAyuda, Tour, type PasoTour } from "@/components/staff/Tour";
+import { usePendientes } from "@/components/staff/Pendientes";
 import { Avatar, Badge, BadgeInvitado, ErrorCarga, PageHeader, Skeleton, SkeletonRows, Vacio, useQuery, useRefrescoAlVolver } from "@/components/staff/ui";
 import { aISO, api, hora } from "@/lib/staff-api";
 
@@ -18,16 +19,16 @@ const BIENVENIDA: PasoTour[] = [
 ];
 
 async function cargar() {
-  const [jugadores, hoy, pendientes, solicitudes] = await Promise.all([
+  const [jugadores, hoy, solicitudes] = await Promise.all([
     api.jugadores(),
     api.asistencias(aISO(new Date())),
-    api.pendientes(),
     api.solicitudes().then((l) => l.length).catch(() => 0),
   ]);
-  return { jugadores, hoy: hoy.filter((a) => a.estado !== "disputada"), pendientes, solicitudes };
+  return { jugadores, hoy: hoy.filter((a) => a.estado !== "disputada"), solicitudes };
 }
 
 export default function Resumen() {
+  const { total: nPend } = usePendientes();
   const { data, error, cargando, reload } = useQuery(cargar);
   useRefrescoAlVolver(reload);
 
@@ -42,7 +43,7 @@ export default function Resumen() {
         <BotonAyuda id="bienvenida" />
         <NinoNuevo onCreado={reload} />
       </PageHeader>
-      <Tour id="bienvenida" pasos={BIENVENIDA} />
+      <Tour id="bienvenida" pasos={BIENVENIDA} auto />
       <div className="s-grid c4 kpi">
         <Link href="/staff/asistencia" className="s-card s-stat">
           <div className="k">Llegadas hoy</div>
@@ -51,8 +52,8 @@ export default function Resumen() {
         </Link>
         <Link href="/staff/asistencia" className="s-card s-stat">
           <div className="k">Por revisar</div>
-          <div className="v">{data ? data.pendientes.length : <Skeleton w={50} h={30} />}</div>
-          <div className="h">{data?.pendientes.length ? "Llegadas que la cámara no reconoció" : "Todo al día"}</div>
+          <div className="v">{data ? nPend : <Skeleton w={50} h={30} />}</div>
+          <div className="h">{nPend ? "Llegadas que la cámara no reconoció" : "Todo al día"}</div>
         </Link>
         <Link href="/staff/solicitudes" className="s-card s-stat">
           <div className="k">Inscripciones</div>
@@ -66,11 +67,11 @@ export default function Resumen() {
         </Link>
       </div>
 
-      {data && data.pendientes.length > 0 && (
+      {data && nPend > 0 && (
         <div className="s-alert warn">
           <BellRing size={16} aria-hidden />
           <div>
-            Hay {data.pendientes.length} llegada(s) por revisar.{" "}
+            Hay {nPend} llegada(s) por revisar.{" "}
             <Link href="/staff/asistencia" style={{ color: "inherit", fontWeight: 600 }}>
               Revisar ahora
             </Link>

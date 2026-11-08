@@ -170,14 +170,20 @@ export type Asistencia = {
   motivo?: string | null;
 };
 
+export type MotivoPendiente = "no_reconocido" | "no_soy_yo" | "nino_nuevo";
+
 export type Pendiente = {
   id: number;
   timestamp: string;
   miniatura: string;
-  motivo?: "no_reconocido" | "no_soy_yo";
+  motivo?: MotivoPendiente;
   sugerido: { id: number; nombre: string; similitud: number } | null;
   disputa_de?: { id: number; nombre: string | null } | null;
 };
+
+export type Novedades = { ultimo_id: number; total: number; nuevos: Pendiente[] };
+
+export type JugadorSinAsistencia = { id: number; nombre: string; categoria: string | null };
 
 export type Solicitud = {
   id: number;
@@ -325,6 +331,30 @@ export const api = {
     json<EnlaceNuevo>("/inscripcion/enlaces", { method: "POST", body: form({ categoria, dias }) }),
   revocarEnlace: (id: number) => json<unknown>(`/inscripcion/enlaces/${id}`, { method: "DELETE" }),
   pendientes: () => json<Pendiente[]>("/pendientes"),
+  /** Novedades de pendientes desde un id. Si el backend aún no tiene el endpoint, se simula con /pendientes. */
+  novedades: async (desde: number): Promise<Novedades> => {
+    try {
+      return await json<Novedades>(`/pendientes/novedades?desde=${desde}`);
+    } catch (e) {
+      if (!(e instanceof ApiError) || (e.status !== 404 && e.status !== 405 && e.status !== 422)) throw e;
+      const l = await json<Pendiente[]>("/pendientes");
+      return { ultimo_id: l.reduce((m, p) => Math.max(m, p.id), desde), total: l.length, nuevos: l.filter((p) => p.id > desde) };
+    }
+  },
+  preferencias: () => json<{ tours_vistos: string[] }>("/staff/preferencias"),
+  marcarTour: (id: string) => json<unknown>(`/staff/tours/${encodeURIComponent(id)}`, { method: "POST" }),
+  reiniciarTours: () => json<unknown>("/staff/tours", { method: "DELETE" }),
+  /** Inscritos sin asistencia hoy. Si el endpoint no existe aún, se calcula con jugadores + asistencias de hoy. */
+  sinAsistenciaHoy: async (): Promise<JugadorSinAsistencia[]> => {
+    try {
+      return await json<JugadorSinAsistencia[]>("/jugadores/sin-asistencia-hoy");
+    } catch (e) {
+      if (!(e instanceof ApiError) || (e.status !== 404 && e.status !== 405 && e.status !== 422)) throw e;
+      const [js, as] = await Promise.all([json<Jugador[]>("/jugadores"), json<Asistencia[]>(`/asistencias?fecha=${aISO(new Date())}&limit=1000`)]);
+      const hoy = new Set(as.filter((a) => !a.estado || a.estado === "valida").map((a) => a.jugador_id));
+      return js.filter((j) => j.estado !== "invitado" && !hoy.has(j.id)).map((j) => ({ id: j.id, nombre: j.nombre, categoria: j.categoria }));
+    }
+  },
   asignarPendiente: (id: number, jugadorId: number) =>
     json<{ nombre: string; ya_registrado: boolean; foto_guardada: boolean; motivo: string | null; disputa: Disputa }>(
       `/pendientes/${id}/asignar`,
@@ -332,7 +362,7 @@ export const api = {
     ),
   descartarPendiente: (id: number) => json<{ disputa: Disputa }>(`/pendientes/${id}`, { method: "DELETE" }),
   marcarAsistencia: (jugadorId: number) =>
-    json<{ nombre: string; ya_registrado: boolean }>("/asistencia/manual", {
+    json<{ nombre: string; ya_registrado: boolean; id?: number; asistencia_id?: number }>("/asistencia/manual", {
       method: "POST",
       body: form({ jugador_id: jugadorId }),
     }),
@@ -449,3 +479,6 @@ export function escucharPendientes(cb: (n: number) => void) {
   window.addEventListener(EVENTO_SOL, f);
   return () => window.removeEventListener(EVENTO_SOL, f);
 }
+
+/** Para buscar sin importar tildes ni mayúsculas: "Matías" coincide con "matias". */
+export const sinTildes = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim();

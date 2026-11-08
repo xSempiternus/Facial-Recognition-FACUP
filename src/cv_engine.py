@@ -138,7 +138,7 @@ def _analizar_rapido(img: np.ndarray, miniatura: bool, cfg: dict) -> dict:
                              detector_backend="skip", enforce_detection=False, align=False)[0]["embedding"]
     a = cara.facial_area
     resultado = {"embedding": [float(x) for x in emb], "num_rostros": len(caras),
-                 "confianza": float(c["score"]), "tamano_rostro": a.w / ancho}
+                 "confianza": float(c["score"]), "tamano_rostro": a.w / ancho, "rapido": True}
     if miniatura:
         resultado["miniatura"] = _miniatura(img, {"x": a.x, "y": a.y, "w": a.w, "h": a.h})
     return resultado
@@ -153,6 +153,8 @@ def analyze_face(image_bytes: bytes, miniatura: bool = False, antispoofing: bool
     Con antispoofing=True lanza SpoofError si la cara parece una foto/pantalla.
     Con rapido=True (solo retinaface, sin antispoofing) usa el camino rápido; ante cualquier problema
     cae al camino de referencia. Úsalo solo para verificar: la inscripción siempre usa el de referencia.
+    El resultado lleva 'rapido': True solo si salió del camino rápido (si cayó al de referencia, no hace falta
+    repetir el análisis de referencia).
     """
     cfg = config if cfg is None else cfg
     img = _decode_image(image_bytes)
@@ -256,5 +258,12 @@ def warmup(cfg: dict | None = None) -> None:
         DeepFace.extract_faces(img_path=vacia, detector_backend=config["detector"], enforce_detection=False)
     except Exception:
         pass
+    if config["detector"] == "retinaface":
+        # El camino rápido de /verify (retinaface sobre <=640 px, sin upscaling) también se precalienta.
+        for forma in ((480, 640, 3), (640, 480, 3)):
+            try:
+                _analizar_rapido(np.zeros(forma, np.uint8), False, config)
+            except Exception:
+                pass
     if config.get("antispoofing"):
         DeepFace.build_model("Fasnet", task="spoofing")

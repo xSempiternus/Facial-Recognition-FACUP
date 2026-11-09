@@ -56,6 +56,25 @@ UMBRAL_AUTO_OFFSET = _float_env("UMBRAL_AUTO_OFFSET", 0.05)
 MARGEN_MIN = _float_env("MARGEN_MIN", 0.04)
 RESULTADOS = ("aceptado", "dudoso", "rechazado")
 
+# ---- Modo SOMBRA (solo mide y registra; NUNCA cambia el veredicto de /verify, que sigue siendo `decidir`).
+# Ensemble: SFace (~9 ms en CPU) como segundo modelo sobre el MISMO recorte alineado que usó el modelo principal.
+# Al inscribir se guarda además su plantilla (tabla fotos, modelo "SFace"); al verificar solo se calcula en zona gris.
+MODELO_SOMBRA = "SFace"
+# Holgura sobre el umbral automático bajo la cual un ACEPTADO se considera "justo" (zona gris de la sombra).
+HOLGURA_SOMBRA = 0.05
+# fusion_score = promedio ponderado de los puntajes normalizados por su umbral de duda (>= 1.0: sobre el umbral).
+PESO_FUSION_PRIMARIO = _float_env("PESO_FUSION_PRIMARIO", 0.6)
+
+
+def fusion(score_primario: float | None, umbral_primario: float, score_sombra: float | None,
+           umbral_sombra: float | None = None, peso_primario: float | None = None) -> float | None:
+    """Promedio ponderado de score/umbral de cada modelo. None si falta alguno de los dos puntajes."""
+    if score_primario is None or score_sombra is None or not umbral_primario:
+        return None
+    umbral_sombra = umbral_sombra or UMBRAL_POR_MODELO[MODELO_SOMBRA]
+    w = PESO_FUSION_PRIMARIO if peso_primario is None else peso_primario
+    return w * (score_primario / umbral_primario) + (1 - w) * (score_sombra / umbral_sombra)
+
 
 def load_config(ruta: Path | None = None) -> dict:
     ruta = Path(ruta) if ruta else CONFIG_PATH
@@ -196,19 +215,19 @@ def _analizar_rapido(img: np.ndarray, miniatura: bool, cfg: dict) -> dict:
                                    width_border=wb, height_border=hb, detector_backend="retinaface")
     if cara.img.shape[0] == 0 or cara.img.shape[1] == 0:
         raise FaceNotFoundError("No se detectó ningún rostro en la imagen.")
-    emb = DeepFace.represent(img_path=np.ascontiguousarray(cara.img), model_name=cfg["modelo"],
-                             detector_backend="skip", enforce_detection=False, align=False)[0]["embedding"]
+    recorte = np.ascontiguousarray(cara.img)
+    emb = embedding_recorte(recorte, cfg["modelo"])
     a = cara.facial_area
-    resultado = {"embedding": [float(x) for x in emb], "num_rostros": len(caras),
+    resultado = {"embedding": emb, "num_rostros": len(caras),
                  "confianza": float(c["score"]), "tamano_rostro": a.w / ancho, "rapido": True,
-                 "ms_deteccion": ms_deteccion}
+                 "ms_deteccion": ms_deteccion, "_recorte": recorte}
     if miniatura:
         resultado["miniatura"] = _miniatura(img, {"x": a.x, "y": a.y, "w": a.w, "h": a.h})
     return resultado
 
 
 def analyze_face(image_bytes: bytes, miniatura: bool = False, antispoofing: bool = False,
-                 rapido: bool = False, cfg: dict | None = None) -> dict:
+                 rapido: bool = False, cfg: dict | None = None, modelos_extra: tuple[str, ...] = ()) -> dict:
     """
     Detecta el rostro principal (el más grande) y retorna:
     {'embedding', 'num_rostros', 'confianza', 'tamano_rostro'} (+ 'miniatura' JPEG si se pide)
@@ -218,23 +237,31 @@ def analyze_face(image_bytes: bytes, miniatura: bool = False, antispoofing: bool
     cae al camino de referencia. Úsalo solo para verificar: la inscripción siempre usa el de referencia.
     El resultado lleva 'rapido': True solo si salió del camino rápido (si cayó al de referencia, no hace falta
     repetir el análisis de referencia).
+    Siempre lleva '_recorte' (cara alineada, uso interno: nunca se serializa ni se guarda) para que la sombra
+    calcule otros modelos sobre el MISMO recorte. `modelos_extra`: modelos adicionales calculados sobre ese
+    recorte -> 'embeddings_extra' {modelo: embedding}; un fallo de un modelo extra solo lo omite (nunca rompe).
     """
     cfg = config if cfg is None else cfg
     img = _decode_image(image_bytes)
+    resultado = None
     if rapido and cfg["detector"] == "retinaface" and not antispoofing:
         try:
-            return _analizar_rapido(img, miniatura, cfg)
+            resultado = _analizar_rapido(img, miniatura, cfg)
         except Exception:  # cualquier fallo: se repite con el camino de referencia
-            pass
+            resultado = None
+    if resultado is None:
+        resultado = _analizar_referencia(img, miniatura, antispoofing, cfg)
+    if modelos_extra:
+        resultado["embeddings_extra"] = embeddings_extra(resultado["_recorte"], modelos_extra, cfg["modelo"])
+    return resultado
+
+
+def _analizar_referencia(img: np.ndarray, miniatura: bool, antispoofing: bool, cfg: dict) -> dict:
+    """Equivale exactamente a DeepFace.represent(detector, align=True) (mismo extract_faces, misma conversión
+    RGB->BGR, mismo resize), pero en dos pasos para conservar el recorte alineado de la cara principal."""
     try:
-        faces = DeepFace.represent(
-            img_path=img,
-            model_name=cfg["modelo"],
-            detector_backend=cfg["detector"],
-            enforce_detection=True,
-            align=True,
-            anti_spoofing=antispoofing,
-        )
+        faces = _deteccion.extract_faces(img_path=img, detector_backend=cfg["detector"], enforce_detection=True,
+                                         align=True, expand_percentage=0, anti_spoofing=antispoofing)
     except SpoofDetected as exc:
         raise SpoofError("La cara parece una foto o una pantalla.") from exc
     except ValueError as exc:
@@ -243,22 +270,61 @@ def analyze_face(image_bytes: bytes, miniatura: bool = False, antispoofing: bool
         if "could not be detected" in str(exc):
             raise FaceNotFoundError("No se detectó ningún rostro en la imagen.") from exc
         raise RuntimeError(f"Error del motor de reconocimiento: {exc}") from exc
-
+    if antispoofing and any(f.get("is_real", True) is False for f in faces):
+        raise SpoofError("La cara parece una foto o una pantalla.")  # igual que represent: basta una cara falsa
     if not faces:
         raise FaceNotFoundError("No se detectó ningún rostro en la imagen.")
 
-    main_face = max(
-        faces, key=lambda f: f["facial_area"]["w"] * f["facial_area"]["h"]
-    )
+    main_face = max(faces, key=lambda f: f["facial_area"]["w"] * f["facial_area"]["h"])
+    # extract_faces entrega RGB en [0, 1]; represent lo pasa a BGR antes del modelo: aquí igual.
+    recorte = np.ascontiguousarray(main_face["face"][:, :, ::-1])
+    try:
+        emb = embedding_recorte(recorte, cfg["modelo"])
+    except ValueError as exc:
+        raise RuntimeError(f"Error del motor de reconocimiento: {exc}") from exc
     resultado = {
-        "embedding": [float(x) for x in main_face["embedding"]],
+        "embedding": emb,
         "num_rostros": len(faces),
-        "confianza": float(main_face.get("face_confidence") or 0.0),
+        "confianza": float(main_face.get("confidence") or 0.0),
         "tamano_rostro": main_face["facial_area"]["w"] / img.shape[1],
+        "_recorte": recorte,
     }
     if miniatura:
         resultado["miniatura"] = _miniatura(img, main_face["facial_area"])
     return resultado
+
+
+def embedding_recorte(recorte: np.ndarray, modelo: str) -> list[float]:
+    """Embedding de una cara YA recortada y alineada (BGR, uint8 o float en [0, 1]), sin detector."""
+    emb = DeepFace.represent(img_path=recorte, model_name=modelo, detector_backend="skip",
+                             enforce_detection=False, align=False)[0]["embedding"]
+    return [float(x) for x in emb]
+
+
+def embeddings_extra(recorte: np.ndarray | None, modelos: tuple[str, ...], modelo_principal: str) -> dict:
+    """{modelo: embedding} de otros modelos sobre el mismo recorte. Omite el principal y los que fallen."""
+    salida = {}
+    if recorte is None:
+        return salida
+    for m in modelos:
+        if m == modelo_principal or m in salida:
+            continue
+        try:
+            salida[m] = embedding_recorte(recorte, m)
+        except Exception:  # la sombra nunca rompe la inscripción ni la verificación
+            continue
+    return salida
+
+
+# Cara recortada en el celular (modo sombra de /verify, campo `cara`): JPEG chico ya recortado/alineado.
+CARA_CLIENTE_MAX_BYTES = 64 * 1024
+CARA_CLIENTE_LADO_MIN = 64
+CARA_CLIENTE_LADO_MAX = 320
+
+
+def embedding_cara_cliente(jpeg: bytes, modelo: str) -> list[float]:
+    """Embedding (detector skip, sin retinaface) de la cara que recortó el celular. ValueError si no decodifica."""
+    return embedding_recorte(_decode_image(jpeg), modelo)
 
 
 def get_embedding(image_bytes: bytes) -> list[float]:
@@ -330,3 +396,8 @@ def warmup(cfg: dict | None = None) -> None:
                 pass
     if config.get("antispoofing"):
         DeepFace.build_model("Fasnet", task="spoofing")
+    if config["modelo"] != MODELO_SOMBRA:
+        try:  # modelo sombra (SFace, OpenCV, ~9 ms): que su primera llamada no sume la carga
+            embedding_recorte(np.zeros((112, 112, 3), np.uint8), MODELO_SOMBRA)
+        except Exception:
+            pass

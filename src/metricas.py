@@ -282,4 +282,33 @@ def reconocimiento(db, dias: int, umbral_auto: float, umbral_duda: float, margen
         "margen_mediano_aceptados": margen_med,
         "umbrales": {"auto": umbral_auto, "duda": umbral_duda, "margen_min": margen_min},
         "sugerencia": sugerencia,
+        **_sombra(filas),
+    }
+
+
+def _sombra(filas: list[dict]) -> dict:
+    """Modo sombra (no decide nada): ensemble SFace en zona gris y cara recortada en el celular."""
+    ens = [f for f in filas if f.get("score_sface") is not None]
+    coinciden = sum(1 for f in ens if f.get("sface_coincide") == 1)
+    con_staff = [f for f in ens if f.get("staff_id") is not None]
+    corregidas = [f for f in con_staff if f.get("mejor_id") is not None and f["staff_id"] != f["mejor_id"]]
+    cli = [f for f in filas if f.get("score_cliente") is not None]
+    difs = [f["score_cliente"] - f["mejor_score"] for f in cli if f.get("mejor_score") is not None]
+    return {
+        "ensemble": {
+            "modelo": "SFace",
+            "n": len(ens),  # verificaciones en zona gris con dato SFace (jugadores con plantilla SFace)
+            "coincide_pct": round(100 * coinciden / len(ens), 1) if ens else None,
+            "fusion_mediana": _mediana([f["fusion_score"] for f in ens if f.get("fusion_score") is not None]),
+            "con_decision_staff": len(con_staff),
+            "staff_confirmo_primario": sum(1 for f in con_staff if f["staff_id"] == f.get("mejor_id")),
+            "staff_corrigio_primario": len(corregidas),
+            "sface_habria_acertado": sum(1 for f in corregidas if f.get("candidato_sface") == f["staff_id"]),
+        },
+        "recorte_celular": {
+            "n": len(cli),
+            "score_mediano": _mediana([f["score_cliente"] for f in cli]),
+            "diferencia_mediana": _mediana(difs),  # score_cliente - score del servidor (mismo candidato)
+            "ms_mediano": _mediana([f["ms_cliente"] for f in cli if f.get("ms_cliente") is not None]),
+        },
     }

@@ -75,7 +75,7 @@ class Sede:
         self.avisos: dict[str, dict] = {}
         # avisos ya resueltos {aviso: (t, "pendiente" | "descartado")} (idempotencia), viven AVISO_TTL_S
         self.avisos_usados: dict[str, tuple[float, str]] = {}
-        self._matriz: tuple | None = None  # caché de plantillas (ver matriz_plantillas)
+        self._matrices: dict[str, tuple] = {}  # caché de plantillas por modelo (ver matriz_plantillas)
         self.lock = threading.RLock()
         self.db.init_db()
         self._sal = self.db.ip_sal().encode()
@@ -135,17 +135,18 @@ class Sede:
                 salida[jid] = embs
         return salida
 
-    def matriz_plantillas(self) -> tuple[list[int], "np.ndarray | None", "np.ndarray | None"]:
-        """(claves, matriz float32, normas) de las plantillas actuales, cacheada mientras no cambien.
+    def matriz_plantillas(self, modelo: str | None = None) -> tuple[list[int], "np.ndarray | None", "np.ndarray | None"]:
+        """(claves, matriz float32, normas) de las plantillas del modelo actual (o de `modelo`, p. ej. el modelo
+        sombra), cacheada mientras no cambien.
 
         Huella: modelo + por jugador (id, estado, id(lista de plantillas), largo). La caché retiene esas listas, así
         que sus id() no se reutilizan mientras está viva: alta, baja, cambio de estado, foto agregada o recarga
         cambian la huella. Mismas operaciones float32 que cv_engine.best_candidate (puntajes idénticos), sin
         reconvertir miles de floats de Python en cada /verify."""
-        modelo = self.config["modelo"]
+        modelo = modelo or self.config["modelo"]
         items = list(self.jugadores.items())
         huella = (modelo, tuple((jid, d["estado"], id(d["plantillas"]), len(d["plantillas"])) for jid, d in items))
-        cache = self._matriz
+        cache = self._matrices.get(modelo)
         if cache is not None and cache[0] == huella:
             return cache[2], cache[3], cache[4]
         claves, filas = [], []
@@ -161,8 +162,27 @@ class Sede:
             normas = np.linalg.norm(mat, axis=1)
         else:
             mat = normas = None
-        self._matriz = (huella, [d["plantillas"] for _, d in items], claves, mat, normas)
+        if len(self._matrices) > 4 and modelo not in self._matrices:  # cambios de modelo: no acumular cachés
+            self._matrices.clear()
+        self._matrices[modelo] = (huella, [d["plantillas"] for _, d in items], claves, mat, normas)
         return claves, mat, normas
+
+    def puntajes_por_jugador(self, embedding, modelo: str | None = None) -> dict[int, float]:
+        """{jugador_id: mejor similitud entre sus plantillas de `modelo`} (solo activos con plantilla de ese modelo).
+        Lo usa el modo sombra (ensemble y cara recortada en el celular); no participa del veredicto."""
+        claves, mat, normas_m = self.matriz_plantillas(modelo)
+        if mat is None or not claves:
+            return {}
+        t = np.asarray(embedding, dtype=np.float32)
+        if mat.shape[1] != t.shape[0]:
+            return {}
+        normas = normas_m * np.linalg.norm(t)
+        puntajes = np.divide(mat @ t, normas, out=np.zeros(len(claves), np.float32), where=normas != 0)
+        salida: dict[int, float] = {}
+        for k, p in zip(claves, puntajes.tolist()):
+            if p > salida.get(k, -2.0):
+                salida[k] = p
+        return salida
 
     def mejor_candidato(self, embedding, excluir: int | None = None) -> tuple[int | None, float]:
         """Como cv_engine.best_candidate(embedding, plantillas_actuales()) pero con la matriz cacheada.
@@ -209,7 +229,8 @@ class Sede:
     def nuevo_pendiente(self, embedding: list[float], miniatura: bytes, timestamp: str | None = None,
                         motivo: str = "no_reconocido", disputa_de: int | None = None,
                         asistencia_id: int | None = None, modelo: str | None = None,
-                        sugerencia: tuple[int | None, float] | None = None, parecido: str | None = None) -> int:
+                        sugerencia: tuple[int | None, float] | None = None, parecido: str | None = None,
+                        verificacion_id: int | None = None) -> int:
         """`sugerencia` (jugador_id, similitud) ya calculada (avisos del kiosko); si no, se calcula aquí.
         Con disputa_de se sugiere a otro niño, no al que se reconoció por error.
         `parecido` 'alto' | 'medio' (captura DUDOSA): la sugerencia se conserva siempre (si el jugador existe);
@@ -223,19 +244,20 @@ class Sede:
             parecido = None
         return self.db.crear_pendiente(timestamp or ahora_ts(), embedding, modelo or self.config["modelo"],
                                        miniatura, sugerido, float(sim) if sugerido is not None else None,
-                                       motivo, disputa_de, asistencia_id, parecido)
+                                       motivo, disputa_de, asistencia_id, parecido, verificacion_id)
 
     # ---------------------------------------------------------- avisos de fallo del kiosko (memoria, TTL 3 min)
 
-    def crear_aviso(self, face: dict, sugerencia: tuple[int | None, float], parecido: str | None = None) -> str:
+    def crear_aviso(self, face: dict, sugerencia: tuple[int | None, float], parecido: str | None = None,
+                    verificacion_id: int | None = None) -> str:
         """Guarda la captura no reconocida (o dudosa) bajo un id aleatorio de un solo uso. No crea pendiente todavía.
         `parecido`: 'alto' | 'medio' si fue DUDOSA; None si fue rechazada (al pasar a pendiente: 'bajo' si hay
-        sugerido)."""
+        sugerido). `verificacion_id`: fila del registro de puntajes (para anotar después qué decidió el staff)."""
         token = secrets.token_urlsafe(18)
         with self.lock:
             self.avisos[token] = {"t": time.monotonic(), "timestamp": ahora_ts(), "embedding": face["embedding"],
                                   "modelo": self.config["modelo"], "miniatura": face.get("miniatura") or b"",
-                                  "sugerencia": sugerencia, "parecido": parecido}
+                                  "sugerencia": sugerencia, "parecido": parecido, "verificacion_id": verificacion_id}
         self.vencer_avisos()
         return token
 
@@ -257,7 +279,7 @@ class Sede:
     def _aviso_a_pendiente(self, a: dict, motivo: str) -> int:
         return self.nuevo_pendiente(a["embedding"], a["miniatura"], a["timestamp"], motivo=motivo,
                                     modelo=a["modelo"], sugerencia=a["sugerencia"],
-                                    parecido=a.get("parecido") or "bajo")
+                                    parecido=a.get("parecido") or "bajo", verificacion_id=a.get("verificacion_id"))
 
     def vencer_avisos(self, todos: bool = False) -> int:
         """Purga perezosa (al crear/resolver avisos, en cada consulta del staff a /pendientes* y cada
@@ -295,13 +317,15 @@ class Sede:
         while len(self.reportes) > MAX_REPORTES:
             del self.reportes[min(self.reportes, key=lambda k: self.reportes[k]["t"])]
 
-    def crear_reporte(self, face: dict, jugador_id: int, asistencia_id: int | None) -> str:
+    def crear_reporte(self, face: dict, jugador_id: int, asistencia_id: int | None,
+                      verificacion_id: int | None = None) -> str:
         token = secrets.token_urlsafe(18)
         with self.lock:
             self._podar_reportes()
             self.reportes[token] = {"t": time.monotonic(), "timestamp": ahora_ts(), "embedding": face["embedding"],
                                     "modelo": self.config["modelo"], "miniatura": face.get("miniatura") or b"",
-                                    "jugador_id": jugador_id, "asistencia_id": asistencia_id}
+                                    "jugador_id": jugador_id, "asistencia_id": asistencia_id,
+                                    "verificacion_id": verificacion_id}
         return token
 
     def tomar_reporte(self, token: str) -> dict | None:
@@ -362,10 +386,19 @@ def precalentar_nombre(nombre: str) -> None:
                 loop.call_soon_threadsafe(lambda: asyncio.ensure_future(precalentar_voz([n])))
 
 
+def plantillas_sombra(caras: list[dict]) -> dict[str, list]:
+    """{modelo_sombra: [embeddings]} de las fotos de una inscripción (modo sombra; vacío si no se pudo calcular)."""
+    m = cv_engine.MODELO_SOMBRA
+    embs = [c["embeddings_extra"][m] for c in caras if m in (c.get("embeddings_extra") or {})]
+    return {m: embs} if embs else {}
+
+
 async def analizar(s: Sede, file: UploadFile, miniatura: bool = False, n_foto: int | None = None,
                    antispoofing: bool = False, rapido: bool = False, publico: bool = False,
                    max_bytes: int | None = None, max_lado: int | None = None,
-                   formatos: set[str] | None = None) -> dict:
+                   formatos: set[str] | None = None, sombra: bool = False) -> dict:
+    """`sombra=True` (inscripción): además calcula el modelo sombra (SFace) sobre el mismo recorte alineado ->
+    'embeddings_extra'. El resultado trae siempre '_recorte' (uso interno, no se serializa)."""
     await file.seek(0)
     cual = f" en la foto {n_foto}" if n_foto else ""
     extra = {"foto": n_foto} if n_foto else {}
@@ -391,7 +424,7 @@ async def analizar(s: Sede, file: UploadFile, miniatura: bool = False, n_foto: i
     try:
         # DeepFace es bloqueante (CPU); se ejecuta fuera del event loop. Usa la configuración de la sede.
         return await run_in_threadpool(cv_engine.analyze_face, image_bytes, miniatura, antispoofing, rapido,
-                                       dict(s.config))
+                                       dict(s.config), (cv_engine.MODELO_SOMBRA,) if sombra else ())
     except cv_engine.SpoofError:
         error(422, "foto_falsa", "La cara parece una foto o una pantalla, no una persona.")
     except cv_engine.FaceNotFoundError:

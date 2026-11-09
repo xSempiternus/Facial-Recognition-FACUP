@@ -230,8 +230,10 @@ class Base(FlujosDB):
 
     def insert_jugador(self, nombre: str, embedding: list[float], categoria: str | None = None,
                        modelo: str = MODELO_LEGADO, fotos_extra: list[list[float]] | None = None,
-                       consentimiento_tutor: str | None = None) -> int:
-        """Inscribe un jugador. `embedding` es la foto principal; `fotos_extra` son fotos adicionales."""
+                       consentimiento_tutor: str | None = None,
+                       plantillas_extra: dict[str, list[list[float]]] | None = None) -> int:
+        """Inscribe un jugador. `embedding` es la foto principal; `fotos_extra` son fotos adicionales.
+        `plantillas_extra` {modelo: [embeddings]}: plantillas de modelos sombra (p. ej. SFace) de las mismas fotos."""
         ahora = _now()
         with self.conexion() as conn:
             cur = conn.execute(
@@ -244,7 +246,9 @@ class Base(FlujosDB):
             conn.executemany(
                 "INSERT INTO fotos (jugador_id, embedding, modelo, origen, creado_en) "
                 "VALUES (?, ?, ?, 'inscripcion', ?)",
-                [(jugador_id, json.dumps(e), modelo, ahora) for e in [embedding, *(fotos_extra or [])]],
+                [(jugador_id, json.dumps(e), modelo, ahora) for e in [embedding, *(fotos_extra or [])]]
+                + [(jugador_id, json.dumps(e), m, ahora) for m, es in (plantillas_extra or {}).items()
+                   if m != modelo for e in es],
             )
             return jugador_id
 
@@ -330,6 +334,9 @@ class Base(FlujosDB):
                 # El registro de puntajes se conserva (calibración) sin la referencia al jugador borrado.
                 conn.execute("UPDATE verificaciones_log SET mejor_id = NULL WHERE mejor_id = ?", (jugador_id,))
                 conn.execute("UPDATE verificaciones_log SET segundo_id = NULL WHERE segundo_id = ?", (jugador_id,))
+                conn.execute("UPDATE verificaciones_log SET candidato_sface = NULL WHERE candidato_sface = ?",
+                             (jugador_id,))
+                conn.execute("UPDATE verificaciones_log SET staff_id = NULL WHERE staff_id = ?", (jugador_id,))
         if borrado:
             self.retirar_consentimientos(jugador_id)
             self.limpiar_wal()  # que el WAL no conserve los datos borrados

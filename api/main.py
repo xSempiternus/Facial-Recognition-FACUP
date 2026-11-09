@@ -22,11 +22,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from api import auth, nucleo
+from api import auth, nucleo, sombra
 from api.inscripcion import router as inscripcion_router
 from api.metricas import router as metricas_router
 from api.nucleo import (Sede, analizar as _analyze, error as _error, log, obtener_sede as _obtener_sede,
-                        precalentar_nombre, sede_publica, sede_staff)
+                        plantillas_sombra as _plantillas_sombra, precalentar_nombre, sede_publica, sede_staff)
 from api.revision import router as revision_router
 from api.voz import precalentar as precalentar_voz, router as voz_router
 from src import cv_engine, db_manager, reportes, sedes
@@ -303,8 +303,9 @@ async def enroll(
         _error(400, "demasiadas_fotos", f"Máximo {MAX_FOTOS_INSCRIPCION} fotos por inscripción.")
 
     multiples = len(subidas) > 1
-    caras = [await _analyze(s, f, n_foto=i + 1 if multiples else None) for i, f in enumerate(subidas)]
+    caras = [await _analyze(s, f, n_foto=i + 1 if multiples else None, sombra=True) for i, f in enumerate(subidas)]
     embeddings = [c["embedding"] for c in caras]
+    extras = _plantillas_sombra(caras)
 
     # Las fotos deben ser de la misma persona: se marca la que menos se parece al resto.
     if multiples:
@@ -341,10 +342,12 @@ async def enroll(
     modelo = s.config["modelo"]
     jugador_id = s.db.insert_jugador(nombre, embeddings[0], categoria, modelo,
                                      fotos_extra=embeddings[1:],
-                                     consentimiento_tutor=tutor if consentimiento and tutor else None)
+                                     consentimiento_tutor=tutor if consentimiento and tutor else None,
+                                     plantillas_extra=extras)
     with s.lock:
         s.jugadores[jugador_id] = {"nombre": nombre, "categoria": categoria, "estado": "activo",
-                                   "plantillas": [(modelo, e) for e in embeddings]}
+                                   "plantillas": [(modelo, e) for e in embeddings]
+                                   + [(m, e) for m, es in extras.items() if m != modelo for e in es]}
     precalentar_nombre(nombre)  # voz lista antes de que llegue a la cancha
     return {
         "status": "success",
@@ -359,25 +362,44 @@ async def enroll(
 
 def _log_verificacion(s: Sede, resultado: str, t0: float, mejor_id: int | None = None,
                       mejor_score: float | None = None, segundo_id: int | None = None,
-                      segundo_score: float | None = None, ms_deteccion: int | None = None) -> None:
-    """Registro de puntajes para calibrar (sin biometría). Un fallo del registro nunca rompe /verify."""
+                      segundo_score: float | None = None, ms_deteccion: int | None = None) -> int | None:
+    """Registro de puntajes para calibrar (sin biometría). Un fallo del registro nunca rompe /verify.
+    Retorna el id de la fila (None si falló)."""
     try:
-        s.db.registrar_verificacion(resultado, mejor_id, mejor_score, segundo_id, segundo_score,
-                                    s.umbral_auto(), s.umbral_duda(), s.config["modelo"], s.config["detector"],
-                                    round((time.perf_counter() - t0) * 1000), ms_deteccion)
+        return s.db.registrar_verificacion(resultado, mejor_id, mejor_score, segundo_id, segundo_score,
+                                           s.umbral_auto(), s.umbral_duda(), s.config["modelo"], s.config["detector"],
+                                           round((time.perf_counter() - t0) * 1000), ms_deteccion)
     except Exception:
         log.exception("[%s] no se pudo registrar la verificación", s.slug)
+        return None
 
 
 @app.post("/verify")
-async def verify(file: UploadFile = File(...), s: Sede = Depends(sede_publica)):
-    """Público. Compara SOLO contra los jugadores de la sede del header X-Sede (o ?sede=, o la por defecto)."""
+async def verify(request: Request, file: UploadFile = File(...), s: Sede = Depends(sede_publica)):
+    """Público. Compara SOLO contra los jugadores de la sede del header X-Sede (o ?sede=, o la por defecto).
+
+    Contrato multipart:
+      - `file` (obligatorio): foto del kiosko (JPG/PNG/WEBP, <= 2 MB, <= 2000 px de lado). Es lo ÚNICO que decide.
+      - `cara` (opcional, MODO SOMBRA): la cara ya recortada y alineada en el celular, JPEG de ~160x160
+        (lados entre 64 y 320 px, <= 64 KB). Solo se usa si llega JUNTO con `file`: se calcula el embedding del
+        modelo principal con detector skip (sin retinaface) y se registra en verificaciones_log su puntaje contra el
+        MISMO candidato que eligió el servidor (`score_cliente`) y el tiempo de ese embedding (`ms_cliente`).
+        Nunca cambia el veredicto ni la respuesta; si no cumple el contrato se ignora en silencio. Se procesa
+        después de responder (sin latencia extra para el kiosko).
+    Ensemble sombra: en zona gris (ver api/sombra.py) se registra además SFace sobre el mismo recorte."""
     if s.matriz_plantillas()[1] is None:
         _error(404, "sin_jugadores", "No hay jugadores inscritos todavía.")
 
     umbral_auto, umbral_duda = s.umbral_auto(), s.umbral_duda()
+    modelo = s.config["modelo"]
     antispoofing = s.config.get("antispoofing", False)
     t0 = time.perf_counter()
+    cara_cliente = None
+    if sombra.ACTIVA:
+        try:  # el form ya lo parseó FastAPI (queda en caché): leer `cara` así no falla si llega como texto
+            cara_cliente = await sombra.leer_cara_cliente((await request.form()).get("cara"))
+        except Exception:
+            cara_cliente = None
 
     def clasificar(face):
         mejor_id, score, segundo_id, segundo = s.dos_mejores(face["embedding"])
@@ -403,8 +425,12 @@ async def verify(file: UploadFile = File(...), s: Sede = Depends(sede_publica)):
     jugador = s.jugadores.get(jugador_id) if jugador_id is not None else None
     if jugador is None and res == "aceptado":
         res = "rechazado"  # borrado entre medio (carrera): nunca se acepta a alguien que ya no está
-    _log_verificacion(s, res, t0, jugador_id, score if jugador_id is not None else None, segundo_id, segundo,
-                      face.get("ms_deteccion"))
+    vid = _log_verificacion(s, res, t0, jugador_id, score if jugador_id is not None else None, segundo_id, segundo,
+                            face.get("ms_deteccion"))
+    # MODO SOMBRA (después de responder; no toca `res`): SFace en zona gris y/o la cara recortada en el celular.
+    gris = jugador_id is not None and sombra.zona_gris(res, score, segundo, umbral_auto, umbral_duda)
+    sombra.programar(s, vid, modelo, umbral_duda, jugador_id, score if jugador_id is not None else None,
+                     face.get("_recorte"), gris, cara_cliente)
     if res != "aceptado":
         # NO crea pendiente ni asistencia: la captura queda en memoria (3 min, un solo uso) bajo `aviso`. El kiosko
         # decide con /verify/aviso (entrenador | nuevo | abandono) o /verify/descartar (reintento); si no dice nada,
@@ -414,14 +440,14 @@ async def verify(file: UploadFile = File(...), s: Sede = Depends(sede_publica)):
         parecido = None
         if res == "dudoso":
             parecido = "alto" if score >= umbral_auto else "medio"
-        aviso = await run_in_threadpool(s.crear_aviso, face, (jugador_id, score), parecido)
+        aviso = await run_in_threadpool(s.crear_aviso, face, (jugador_id, score), parecido, vid)
         extra = {"dudoso": True} if res == "dudoso" else {}
         _error(404, "no_reconocido", "Jugador no reconocido.", aviso=aviso, **extra)
 
     registrado_a_las = s.db.asistio_hoy(jugador_id)
     asistencia_id = s.db.registrar_asistencia(jugador_id, similitud=score) if registrado_a_las is None else None
     # Id de un solo uso (2 min) para "No soy yo": solo disputa la asistencia que creó ESTE verify.
-    reporte = s.crear_reporte(face, jugador_id, asistencia_id)
+    reporte = s.crear_reporte(face, jugador_id, asistencia_id, vid)
 
     # Endpoint público (sin auth): solo lo que muestra el kiosko. Nombre de pila, sin id ni similitud.
     return {

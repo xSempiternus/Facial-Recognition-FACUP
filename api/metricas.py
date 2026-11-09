@@ -38,7 +38,9 @@ async def metricas_hoy(categoria: str | None = None, s: Sede = Depends(sede_staf
 async def metricas_reconocimiento(dias: int = Query(30, ge=1, le=metricas.DIAS_RECONOCIMIENTO_MAX),
                                   s: Sede = Depends(sede_staff)):
     """Calibración: puntajes de /verify de los últimos `dias` días (aceptados / dudosos / rechazados, histograma por
-    tramos de 0.05, margen mediano y una sugerencia simple). Sin biometría ni nombres."""
+    tramos de 0.05, margen mediano y una sugerencia simple). Sin biometría ni nombres.
+    Modo sombra: `ensemble` (n con dato SFace, % que coincide con el candidato primario, correcciones del staff y
+    cuántas habría acertado SFace) y `recorte_celular` (puntaje de la cara recortada en el celular)."""
     await run_in_threadpool(s.db.purgar_verificaciones)
     return await run_in_threadpool(metricas.reconocimiento, s.db, dias, s.umbral_auto(), s.umbral_duda(),
                                    cv_engine.MARGEN_MIN)

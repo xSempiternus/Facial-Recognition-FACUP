@@ -144,6 +144,25 @@ class Cliente:
         return r.status_code, cuerpo
 
 
+def recorte_cara(jpeg: bytes, lado: int = 160) -> bytes:
+    """Simula el recorte que haría el celular: cara más grande (Haar de OpenCV), cuadrada, lado x lado, JPEG."""
+    import numpy as np
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    cascada = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    caras = cascada.detectMultiScale(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 1.1, 5)
+    if len(caras):
+        x, y, w, h = max(caras, key=lambda r: r[2] * r[3])
+    else:
+        h0, w0 = img.shape[:2]
+        w = h = min(h0, w0) // 2
+        x, y = (w0 - w) // 2, (h0 - h) // 2
+    cx, cy, r = x + w / 2, y + h / 2, max(w, h) * 0.55
+    x0, y0 = max(int(cx - r), 0), max(int(cy - r), 0)
+    recorte = cv2.resize(img[y0:int(cy + r), x0:int(cx + r)], (lado, lado), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", recorte, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return buf.tobytes()
+
+
 def codigo(cuerpo) -> str | None:
     return cuerpo.get("detail", {}).get("codigo") if isinstance(cuerpo, dict) and isinstance(cuerpo.get("detail"), dict) else None
 
@@ -253,6 +272,11 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     check(sols == [], "la solicitud aprobada desaparece (miniatura borrada)", sols)
     st, b = c.req("POST", f"/solicitudes/{sid_a}/aprobar", token=ta)
     check(st == 404, "aprobar dos veces -> 404", (st, b))
+    with sqlite3.connect(db_a) as conn:
+        n_sface = conn.execute("SELECT COUNT(*) FROM fotos WHERE jugador_id = ? AND modelo = 'SFace'", (id_a,)).fetchone()[0]
+        n_sol_extra = conn.execute("SELECT COUNT(*) FROM solicitudes WHERE embeddings_extra IS NOT NULL").fetchone()[0]
+    check(n_sface == 3 and n_sol_extra == 0, "sombra: aprobar guarda las plantillas SFace calculadas al recibir la "
+                                            "solicitud (y la solicitud se borra)", (n_sface, n_sol_extra))
 
     print("\n== Duplicados")
     st, s2 = solicitud("sede-a", tok, "Ana Repetida", PERSONA_A[3:6])
@@ -628,6 +652,15 @@ def pruebas_umbrales(c: Cliente, srv: Servidor, F: dict[str, bytes], ta: str, tb
     def asistencias_u():
         return c.req("GET", "/asistencias", token=tu, params={"hoy": "true", "todas": "true"})[1]
 
+    def esperar_log(campo, timeout=20):
+        """La sombra completa la fila DESPUÉS de responder: espera a que aparezca `campo` en la última fila."""
+        t0 = time.time()
+        lg = ultimo_log()
+        while lg.get(campo) is None and time.time() - t0 < timeout:
+            time.sleep(0.3)
+            lg = ultimo_log()
+        return lg
+
     # -- compatibilidad: config antigua (solo `umbral`) = umbral de duda; automático = antiguo + 0.05
     legado = json.loads(ruta_cfg.read_text(encoding="utf-8"))
     st, cfg0 = c.req("GET", "/config", token=tu)
@@ -653,6 +686,20 @@ def pruebas_umbrales(c: Cliente, srv: Servidor, F: dict[str, bytes], ta: str, tb
     id_a = inscribir("Ana Umbral", PERSONA_A[:3])
     id_b = inscribir("Beto Umbral", PERSONA_B[:2])
 
+    # -- modo sombra: plantillas SFace del mismo recorte al inscribir; un jugador "antiguo" sin SFace sigue igual
+    with sqlite3.connect(db_u) as conn:
+        n_sf = dict(conn.execute("SELECT jugador_id, COUNT(*) FROM fotos WHERE modelo = 'SFace' "
+                                 "GROUP BY jugador_id").fetchall())
+    check(n_sf == {id_a: 3, id_b: 2}, "sombra: /enroll guarda una plantilla SFace por foto", n_sf)
+    st, jl = c.req("GET", "/jugadores", token=tu)
+    check(st == 200 and {j["id"]: j["fotos"] for j in jl} == {id_a: 3, id_b: 2},
+          "sombra: las plantillas SFace no cuentan como fotos del modelo principal", jl)
+    with sqlite3.connect(db_u) as conn:  # B pasa a ser un jugador inscrito antes del modo sombra
+        conn.execute("DELETE FROM fotos WHERE jugador_id = ? AND modelo = 'SFace'", (id_b,))
+    cat = next(x for x in c.req("GET", "/categorias", token=tu)[1] if x["nombre"] == "Sub-10")
+    st, _ = c.req("PATCH", f"/categorias/{cat['id']}", token=tu, data={"nombre": "Sub-10"})  # recarga la caché
+    check(st == 200, "recarga de la sede con un jugador sin plantilla SFace")
+
     # -- rechazado (umbrales altísimos): se lee el puntaje real de img10 contra A
     poner(0.99, 0.98)
     st, v = verify("img10.jpg")
@@ -664,6 +711,10 @@ def pruebas_umbrales(c: Cliente, srv: Servidor, F: dict[str, bytes], ta: str, tb
           and s2 is not None and s1 > s2 and lg["umbral_auto"] == 0.99 and lg["umbral_duda"] == 0.98
           and lg["ms_total"] is not None and lg["modelo"] == cfg0["modelo"], "registro: mejor y segundo jugador distinto", lg)
     c.req("POST", "/verify/descartar", sede="sede-u", data={"aviso": v["detail"]["aviso"]})
+    time.sleep(1.0)
+    lg = ultimo_log()
+    check(lg["score_sface"] is None and lg["score_cliente"] is None,
+          "sombra: rechazado claro (fuera de zona gris) no calcula SFace", lg)
 
     # -- dudoso por zona gris: duda <= score < automático
     poner(min(s1 + 0.03, 0.99), s1 - 0.03)
@@ -673,6 +724,11 @@ def pruebas_umbrales(c: Cliente, srv: Servidor, F: dict[str, bytes], ta: str, tb
           and set(v["detail"]) == {"codigo", "mensaje", "aviso", "dudoso"} and "Ana" not in texto
           and "similitud" not in texto, "zona gris: 404 no_reconocido con dudoso=true, sin nombre ni puntaje", (st, v))
     check(ultimo_log()["resultado"] == "dudoso", "registro: dudoso")
+    lg = esperar_log("score_sface")
+    fus = 0.6 * lg["mejor_score"] / lg["umbral_duda"] + 0.4 * (lg["score_sface"] or 0) / 0.47
+    check(lg["resultado"] == "dudoso" and lg["candidato_sface"] == id_a and lg["sface_coincide"] == 1
+          and lg["fusion_score"] is not None and abs(lg["fusion_score"] - fus) < 2e-3 and lg["score_cliente"] is None,
+          "sombra: zona gris -> SFace del mismo recorte (coincide con el candidato y fusión ponderada)", lg)
     st, pend = c.req("GET", "/pendientes", token=tu)
     check(pend == [] and asistencias_u() == [], "dudoso NO crea pendiente ni asistencia (antes del aviso)", pend)
     st, n0 = c.req("GET", "/pendientes/novedades", token=tu)
@@ -744,7 +800,9 @@ def pruebas_umbrales(c: Cliente, srv: Servidor, F: dict[str, bytes], ta: str, tb
     with sqlite3.connect(db_u) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(verificaciones_log)")}
     check(cols == {"id", "ts", "resultado", "mejor_id", "mejor_score", "segundo_id", "segundo_score", "umbral_auto",
-                   "umbral_duda", "modelo", "detector", "ms_total", "ms_deteccion"}, "verificaciones_log sin biometría", cols)
+                   "umbral_duda", "modelo", "detector", "ms_total", "ms_deteccion", "score_sface", "candidato_sface",
+                   "fusion_score", "sface_coincide", "score_cliente", "ms_cliente", "staff_id"},
+          "verificaciones_log sin biometría (solo números e ids, también las columnas sombra)", cols)
     st, cfg1 = c.req("GET", "/config", token=tu)
     st, b = c.req("PUT", "/config", token=tu, json={"modelo": cfg0["modelo"], "detector": cfg0["detector"],
                                                     "umbral": cfg1["umbral"]})
@@ -785,6 +843,81 @@ def pruebas_umbrales(c: Cliente, srv: Servidor, F: dict[str, bytes], ta: str, tb
                            "('aceptado', 'dudoso', 'rechazado')").fetchone()[0]
     check(st == 200 and mb["total"] == 0 and st2 == 200 and ma["total"] == n_a > 0,
           "aislamiento: cada sede ve solo su registro", (mb.get("total"), ma.get("total"), n_a))
+
+    # -- modo sombra: cara recortada en el celular (campo `cara` de /verify). Va al final: suma filas al registro.
+    print("\n== Modo sombra: `cara` recortada en el celular (sede-u)")
+    cara = recorte_cara(F["img10.jpg"])
+    st0, v0 = verify("img10.jpg")
+    st, v = c.req("POST", "/verify", sede="sede-u", files={"file": ("k.jpg", F["img10.jpg"], "image/jpeg"),
+                                                         "cara": ("c.jpg", cara, "image/jpeg")})
+    lg = esperar_log("score_cliente")
+    check(st == st0 == 200 and v["nombre"] == "Ana" and set(v) == set(v0) and v["ya_registrado"] is True,
+          "con `cara`: la respuesta y el veredicto no cambian", (st, v))
+    check(lg["resultado"] == "aceptado" and lg["mejor_id"] == id_a and lg["score_cliente"] is not None
+          and -1 <= lg["score_cliente"] <= 1 and lg["ms_cliente"] is not None and lg["ms_cliente"] >= 0,
+          "con `cara`: score_cliente (mismo candidato) y ms_cliente registrados", lg)
+    import numpy as np
+    ok, png = cv2.imencode(".png", cv2.imdecode(np.frombuffer(cara, np.uint8), cv2.IMREAD_COLOR))
+    ok, grande = cv2.imencode(".jpg", np.full((900, 900, 3), 90, np.uint8))
+    ok, chica = cv2.imencode(".jpg", np.full((32, 32, 3), 90, np.uint8))
+    malas = {"png": (png.tobytes(), "image/png"), "lado > 320": (grande.tobytes(), "image/jpeg"),
+             "lado < 64": (chica.tobytes(), "image/jpeg"), "no es imagen": (b"hola", "image/jpeg"),
+             "> 64 KB": (b"\xff\xd8" + os.urandom(70 * 1024), "image/jpeg")}
+    estados = {}
+    for nombre_mala, (datos, tipo) in malas.items():
+        st, v = c.req("POST", "/verify", sede="sede-u", files={"file": ("k.jpg", F["img10.jpg"], "image/jpeg"),
+                                                             "cara": ("c", datos, tipo)})
+        time.sleep(0.8)
+        estados[nombre_mala] = (st, v.get("nombre") if isinstance(v, dict) else v, ultimo_log()["score_cliente"])
+    check(all(e == (200, "Ana", None) for e in estados.values()),
+          "`cara` inválida (png, tamaño, lados, basura): se ignora sin afectar /verify", estados)
+    st, v = c.req("POST", "/verify", sede="sede-u", files={"file": ("k.jpg", F["img10.jpg"], "image/jpeg")},
+                  data={"cara": "texto"})
+    check(st == 200 and v["nombre"] == "Ana", "`cara` como campo de texto: se ignora", (st, v))
+
+    # -- modo sombra: corrección del staff enlazada a la verificación y sección "ensemble" de las métricas
+    print("\n== Modo sombra: corrección del staff y métricas del ensemble")
+    poner(min(s1 + 0.03, 0.99), s1 - 0.03)
+    st, v = verify("img10.jpg")
+    lg = esperar_log("score_sface")
+    check(st == 404 and v["detail"].get("dudoso") is True and lg["score_sface"] is not None, "dudoso con dato SFace", lg)
+    c.req("POST", "/verify/aviso", sede="sede-u", data={"aviso": v["detail"]["aviso"], "tipo": "entrenador"})
+    pend = c.req("GET", "/pendientes", token=tu)[1]
+    with sqlite3.connect(db_u) as conn:
+        vid_p = conn.execute("SELECT verificacion_id FROM pendientes WHERE id = ?", (pend[0]["id"],)).fetchone()[0]
+    st, asg = c.req("POST", f"/pendientes/{pend[0]['id']}/asignar", token=tu, data={"jugador_id": id_b})
+    with sqlite3.connect(db_u) as conn:
+        staff = conn.execute("SELECT staff_id FROM verificaciones_log WHERE id = ?", (lg["id"],)).fetchone()[0]
+    check(vid_p == lg["id"] and st == 200 and staff == id_b,
+          "el pendiente recuerda su verificación y la asignación del staff queda en staff_id", (vid_p, lg["id"], staff))
+    with sqlite3.connect(db_u) as conn:
+        cands = {r[0] for r in conn.execute("SELECT candidato_sface FROM verificaciones_log "
+                                            "WHERE candidato_sface IS NOT NULL")}
+        conn.execute("INSERT INTO verificaciones_log (ts, resultado, mejor_id, mejor_score, score_sface, candidato_sface, "
+                     "sface_coincide, fusion_score, staff_id) VALUES (?, 'dudoso', ?, 0.40, 0.50, ?, 0, 0.9, ?)",
+                     (datetime.now().isoformat(sep=" ", timespec="seconds"), id_a, id_b, id_b))
+        filas = conn.execute("SELECT mejor_id, candidato_sface, sface_coincide, staff_id FROM verificaciones_log "
+                             "WHERE score_sface IS NOT NULL").fetchall()
+        n_cli = conn.execute("SELECT COUNT(*) FROM verificaciones_log WHERE score_cliente IS NOT NULL").fetchone()[0]
+    check(id_b not in cands, "SFace nunca propone a un jugador sin plantilla SFace (inscrito antes)", cands)
+    corr = [f for f in filas if f[3] is not None and f[0] is not None and f[3] != f[0]]
+    esperado = {"modelo": "SFace", "n": len(filas),
+                "coincide_pct": round(100 * sum(1 for f in filas if f[2] == 1) / len(filas), 1),
+                "con_decision_staff": sum(1 for f in filas if f[3] is not None),
+                "staff_confirmo_primario": sum(1 for f in filas if f[3] is not None and f[3] == f[0]),
+                "staff_corrigio_primario": len(corr), "sface_habria_acertado": sum(1 for f in corr if f[1] == f[3])}
+    st, m = c.req("GET", "/metricas/reconocimiento", token=tu)
+    ens = {k: v for k, v in (m.get("ensemble") or {}).items() if k != "fusion_mediana"}
+    check(st == 200 and ens == esperado and esperado["n"] >= 3 and esperado["staff_corrigio_primario"] >= 2
+          and esperado["sface_habria_acertado"] >= 1 and m["ensemble"]["fusion_mediana"] is not None,
+          "/metricas/reconocimiento: sección ensemble (n, % coincide, correcciones del staff, SFace habría acertado)",
+          (m.get("ensemble"), esperado))
+    rc = m.get("recorte_celular") or {}
+    check(rc.get("n") == n_cli >= 1 and rc.get("ms_mediano") is not None and rc.get("diferencia_mediana") is not None,
+          "/metricas/reconocimiento: sección recorte_celular", rc)
+    st, mb = c.req("GET", "/metricas/reconocimiento", token=tb)
+    check(mb["ensemble"]["n"] == 0 and mb["ensemble"]["coincide_pct"] is None and mb["recorte_celular"]["n"] == 0,
+          "aislamiento: el ensemble de sede-u no aparece en sede-b", mb.get("ensemble"))
 
 
 def pruebas_metricas(c: Cliente, srv: Servidor, tb: str):

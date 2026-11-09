@@ -31,7 +31,19 @@ RESULTADOS_VERIFICACION = ("aceptado", "dudoso", "rechazado", "sin_cara", "error
 # medio (zona gris entre umbral_duda y el automático), bajo (rechazado, pero con un candidato sugerible).
 PARECIDOS = ("alto", "medio", "bajo")
 # Columnas agregadas a tablas de este módulo después de su primera versión.
-_MIGRACIONES_FLUJOS = {"pendientes": {"parecido": "TEXT"}}
+# Todas aditivas (ADD COLUMN nullable): una BD vieja sigue funcionando y las filas viejas quedan en NULL.
+_MIGRACIONES_FLUJOS = {
+    # verificacion_id: fila de verificaciones_log de la captura (para saber qué decidió el staff sobre ella).
+    "pendientes": {"parecido": "TEXT", "verificacion_id": "INTEGER"},
+    # {modelo: [embeddings]} de modelos sombra calculados sobre los mismos recortes (p. ej. SFace).
+    "solicitudes": {"embeddings_extra": "TEXT"},
+    # Modo sombra (no cambian el veredicto): ensemble SFace en zona gris, cara recortada en el celular y la
+    # decisión del staff sobre esa captura (staff_id: jugador al que el staff asignó el pendiente).
+    "verificaciones_log": {"score_sface": "REAL", "candidato_sface": "INTEGER", "fusion_score": "REAL",
+                           "sface_coincide": "INTEGER", "score_cliente": "REAL", "ms_cliente": "INTEGER",
+                           "staff_id": "INTEGER"},
+}
+COLUMNAS_SOMBRA = ("score_sface", "candidato_sface", "fusion_score", "sface_coincide", "score_cliente", "ms_cliente")
 _SIN_CAMBIO = object()
 _ALFABETO_CODIGO = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
@@ -248,13 +260,14 @@ class FlujosDB:
                 """
                 INSERT INTO solicitudes (codigo, enlace_id, nombre_nino, anio_nacimiento, categoria, tutor_nombre,
                     tutor_contacto, embeddings, modelo, miniatura, duplicado_de_id, duplicado_similitud,
-                    duplicado_solicitud_id, duplicado_solicitud_similitud, creado_en)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    duplicado_solicitud_id, duplicado_solicitud_similitud, creado_en, embeddings_extra)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (codigo, d["enlace_id"], d["nombre_nino"], d["anio_nacimiento"], d["categoria"], d["tutor_nombre"],
                  d["tutor_contacto"], json.dumps(d["embeddings"]), d["modelo"], d["miniatura"],
                  d.get("duplicado_de_id"), d.get("duplicado_similitud"),
-                 d.get("duplicado_solicitud_id"), d.get("duplicado_solicitud_similitud"), _now()))
+                 d.get("duplicado_solicitud_id"), d.get("duplicado_solicitud_similitud"), _now(),
+                 json.dumps(d["embeddings_extra"]) if d.get("embeddings_extra") else None))
             sid = cur.lastrowid
             conn.execute(
                 "INSERT INTO consentimientos (solicitud_id, version_texto, texto_hash, tutor, contacto, fecha, ip_hash) "
@@ -284,6 +297,11 @@ class FlujosDB:
             return None
         d = dict(r)
         d["embeddings"] = json.loads(d["embeddings"])
+        try:
+            extra = json.loads(d.get("embeddings_extra") or "{}")
+        except ValueError:
+            extra = {}
+        d["embeddings_extra"] = extra if isinstance(extra, dict) else {}
         return d
 
     def borrar_solicitud(self, sid: int) -> bool:
@@ -330,7 +348,9 @@ class FlujosDB:
                 jid = cur.lastrowid
             conn.executemany(
                 "INSERT INTO fotos (jugador_id, embedding, modelo, origen, creado_en) VALUES (?, ?, ?, 'inscripcion', ?)",
-                [(jid, json.dumps(e), modelo, ahora) for e in embs])
+                [(jid, json.dumps(e), modelo, ahora) for e in embs]
+                + [(jid, json.dumps(e), m, ahora) for m, es in (sol.get("embeddings_extra") or {}).items()
+                   if m != modelo for e in es])
             conn.execute("UPDATE consentimientos SET jugador_id = ? WHERE solicitud_id = ?", (jid, sol["id"]))
             conn.execute("DELETE FROM solicitudes WHERE id = ?", (sol["id"],))
         self.limpiar_wal()
@@ -341,7 +361,7 @@ class FlujosDB:
     def crear_pendiente(self, timestamp: str, embedding: list[float], modelo: str, miniatura: bytes,
                         sugerido_id: int | None, similitud: float | None, motivo: str = "no_reconocido",
                         disputa_de: int | None = None, asistencia_id: int | None = None,
-                        parecido: str | None = None) -> int:
+                        parecido: str | None = None, verificacion_id: int | None = None) -> int:
         if motivo not in MOTIVOS_PENDIENTE:
             raise ValueError(f"motivo de pendiente inválido: {motivo}")
         if parecido is not None and parecido not in PARECIDOS:
@@ -349,9 +369,10 @@ class FlujosDB:
         with self.conexion() as conn:
             cur = conn.execute(
                 "INSERT INTO pendientes (timestamp, embedding, modelo, miniatura, sugerido_id, similitud, motivo, "
-                "disputa_de_jugador_id, asistencia_id, parecido) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "disputa_de_jugador_id, asistencia_id, parecido, verificacion_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (timestamp, json.dumps(embedding), modelo, miniatura, sugerido_id, similitud, motivo,
-                 disputa_de, asistencia_id, parecido))
+                 disputa_de, asistencia_id, parecido, verificacion_id))
             pid = cur.lastrowid
         self.purgar_pendientes()
         return pid
@@ -423,26 +444,44 @@ class FlujosDB:
                                segundo_id: int | None = None, segundo_score: float | None = None,
                                umbral_auto: float | None = None, umbral_duda: float | None = None,
                                modelo: str | None = None, detector: str | None = None,
-                               ms_total: int | None = None, ms_deteccion: int | None = None) -> None:
-        """Una fila por /verify (sin biometría ni fotos). Retención RETENCION_VERIFICACIONES_DIAS (purga perezosa)."""
+                               ms_total: int | None = None, ms_deteccion: int | None = None) -> int:
+        """Una fila por /verify (sin biometría ni fotos). Retención RETENCION_VERIFICACIONES_DIAS (purga perezosa).
+        Retorna el id de la fila (la sombra la completa después con actualizar_sombra)."""
         if resultado not in RESULTADOS_VERIFICACION:
             raise ValueError(f"resultado inválido: {resultado}")
 
         def r4(x):
             return None if x is None else round(float(x), 4)
         with self.conexion() as conn:
-            conn.execute(
+            return conn.execute(
                 "INSERT INTO verificaciones_log (ts, resultado, mejor_id, mejor_score, segundo_id, segundo_score, "
                 "umbral_auto, umbral_duda, modelo, detector, ms_total, ms_deteccion) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (_now(), resultado, mejor_id, r4(mejor_score), segundo_id, r4(segundo_score), r4(umbral_auto),
-                 r4(umbral_duda), modelo, detector, ms_total, ms_deteccion))
+                 r4(umbral_duda), modelo, detector, ms_total, ms_deteccion)).lastrowid
+
+    def actualizar_sombra(self, verificacion_id: int, **campos) -> None:
+        """Completa las columnas de modo sombra (COLUMNAS_SOMBRA) de una fila del registro. Solo números e ids."""
+        campos = {k: v for k, v in campos.items() if k in COLUMNAS_SOMBRA}
+        if not campos or not verificacion_id:
+            return
+        valores = [round(float(v), 4) if isinstance(v, float) else v for v in campos.values()]
+        with self.conexion() as conn:
+            conn.execute(f"UPDATE verificaciones_log SET {', '.join(f'{k} = ?' for k in campos)} WHERE id = ?",
+                         (*valores, verificacion_id))
+
+    def marcar_staff_verificacion(self, verificacion_id: int | None, jugador_id: int | None) -> None:
+        """El staff asignó la captura de esa verificación a `jugador_id` (dato de corrección para la sombra)."""
+        if verificacion_id:
+            with self.conexion() as conn:
+                conn.execute("UPDATE verificaciones_log SET staff_id = ? WHERE id = ?", (jugador_id, verificacion_id))
 
     def verificaciones_desde(self, dias: int) -> list[dict]:
-        """Filas de los últimos `dias` días (resultado, puntajes), para /metricas/reconocimiento."""
+        """Filas de los últimos `dias` días (resultado, puntajes, columnas sombra), para /metricas/reconocimiento."""
         with self.conexion() as conn:
             rows = conn.execute(
-                "SELECT ts, resultado, mejor_score, segundo_score, ms_total FROM verificaciones_log "
+                "SELECT ts, resultado, mejor_id, mejor_score, segundo_score, ms_total, score_sface, candidato_sface, "
+                "fusion_score, sface_coincide, score_cliente, ms_cliente, staff_id FROM verificaciones_log "
                 "WHERE ts >= ? ORDER BY id", (_hace(dias),)).fetchall()
         return [dict(r) for r in rows]
 

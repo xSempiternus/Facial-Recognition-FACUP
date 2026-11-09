@@ -19,7 +19,8 @@ from fastapi.concurrency import run_in_threadpool
 
 from api import consentimiento, limites
 from api.auth import _cliente
-from api.nucleo import Sede, analizar, error, log, precalentar_nombre, sede_publica, sede_staff
+from api.nucleo import (Sede, analizar, error, log, plantillas_sombra as _plantillas_sombra, precalentar_nombre,
+                        sede_publica, sede_staff)
 from src import cv_engine, db_manager
 
 router = APIRouter()
@@ -181,7 +182,7 @@ async def inscribir(
         if not (f.content_type or "").startswith("image/"):
             error(415, "formato_no_soportado", f"La foto {n} debe ser una imagen JPG, PNG o WEBP.", foto=n)
         cara = await analizar(s, f, miniatura=not caras, n_foto=n, max_bytes=MAX_BYTES_FOTO_PADRES,
-                              max_lado=MAX_LADO_FOTO_PADRES, formatos=FORMATOS_FOTO)
+                              max_lado=MAX_LADO_FOTO_PADRES, formatos=FORMATOS_FOTO, sombra=True)
         if cara["num_rostros"] != 1:
             error(422, "varias_caras", f"En la foto {n} aparece más de una cara. Debe salir solo el niño o niña.",
                   foto=n)
@@ -211,7 +212,9 @@ async def inscribir(
     datos = {"enlace_id": e["id"], "nombre_nino": nombre, "anio_nacimiento": anio, "categoria": cat,
              "tutor_nombre": tutor, "tutor_contacto": contacto, "embeddings": embeddings, "modelo": modelo,
              "miniatura": caras[0].get("miniatura") or b"", "duplicado_de_id": dup_id, "duplicado_similitud": dup_sim,
-             "duplicado_solicitud_id": dup_sol, "duplicado_solicitud_similitud": dup_sol_sim}
+             "duplicado_solicitud_id": dup_sol, "duplicado_solicitud_similitud": dup_sol_sim,
+             # Modo sombra: plantillas SFace de los mismos recortes (las fotos no se guardan; al aprobar ya no existen).
+             "embeddings_extra": _plantillas_sombra(caras)}
     evidencia = {"version": consentimiento.VIGENTE["version"], "texto_hash": consentimiento.VIGENTE["texto_hash"],
                  "ip_hash": s.ip_hash(ip)}
     sid, codigo = await run_in_threadpool(s.db.crear_solicitud, datos, evidencia)
@@ -275,7 +278,9 @@ def aprobar_solicitud(solicitud_id: int, nombre: str = Form(""), categoria: str 
         error(404, "no_existe", "La solicitud ya fue revisada o expiró.")
     with s.lock:
         s.jugadores[jid] = {"nombre": nombre, "categoria": cat, "estado": "activo",
-                            "plantillas": [(sol["modelo"], e) for e in sol["embeddings"]]}
+                            "plantillas": [(sol["modelo"], e) for e in sol["embeddings"]]
+                            + [(m, e) for m, es in (sol.get("embeddings_extra") or {}).items()
+                               if m != sol["modelo"] for e in es]}
     s.db.auditar("aprobar_solicitud", f"solicitud #{solicitud_id} -> jugador #{jid}"
                  + (" (invitado convertido)" if invitado_id is not None else ""))
     precalentar_nombre(nombre)

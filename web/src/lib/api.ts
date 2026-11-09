@@ -38,9 +38,10 @@ async function enviarUnaVez(form: FormData, señal?: AbortSignal): Promise<Respo
 }
 
 /** Envía la foto. Reintenta una vez si la red falla; `alReintentar` permite mostrar "Sin conexión, reintentando…". */
-export async function verificar(foto: Blob, señal?: AbortSignal, alReintentar?: () => void): Promise<Verificacion> {
+export async function verificar(foto: Blob, señal?: AbortSignal, alReintentar?: () => void, cara?: Blob | null): Promise<Verificacion> {
   const form = new FormData();
   form.append("file", foto, "llegada.jpg");
+  if (cara) form.append("cara", cara, "cara.jpg"); // opcional: recorte alineado (el backend lo valida o lo ignora)
   let resp: Response | null = null;
   for (let i = 0; i < INTENTOS; i++) {
     resp = await enviarUnaVez(form, señal);

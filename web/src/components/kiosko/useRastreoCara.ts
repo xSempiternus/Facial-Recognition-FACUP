@@ -10,6 +10,7 @@ import type { Seguimiento } from "./Foto3D";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { calidadActual, type Calidad } from "./calidad";
 import { PUNTOS_REF, type Rastro } from "./rastro";
+import { recortarCara } from "@/lib/recorte-cara";
 
 export type Postura = "sin-cara" | "lejos" | "cerca" | "descentrado" | "quieto";
 /** Hacia dónde está la cara respecto del centro del marco (para decir "sube", "baja", etc.). */
@@ -30,7 +31,7 @@ type Opciones = {
   progreso: MotionValue<number>;
   activo: boolean;
   intento: number;
-  onCaptura: (foto: Blob) => void;
+  onCaptura: (foto: Blob, cara?: Blob | null) => void;
   /** Se llama en el acto de decidir la foto (antes de procesarla): permite mostrar "verificando" sin esperas. */
   onCapturando?: () => void;
   /** La foto no se pudo leer de la cámara: el rastreo sigue intentando. */
@@ -70,6 +71,8 @@ export function useRastreoCara({
   }
 
   const detector = useRef<FaceLandmarker | null>(null);
+  // Landmarks del último cuadro analizado (ref: sin re-renders). `t` = performance.now() del análisis.
+  const landmarksRef = useRef<{ t: number; puntos: NormalizedLandmark[] } | null>(null);
   const activoRef = useRef(activo);
   const espejoRef = useRef(espejo);
   const capturaRef = useRef({ onCaptura, onCapturando, onCapturaFallida });
@@ -176,6 +179,7 @@ export function useRastreoCara({
       const resultado = fl.detectForVideo(v, ahora);
       const puntos = resultado.faceLandmarks[0];
       hayCara = Boolean(puntos);
+      landmarksRef.current = puntos ? { t: ahora, puntos } : null;
 
       // Rastro para el lienzo de brackets y puntitos (se lee en su propio rAF, sin pasar por React).
       const R = rastro?.current;
@@ -284,14 +288,20 @@ export function useRastreoCara({
         capturaRef.current.onCapturando?.(); // feedback inmediato: "Verificando…" antes de procesar la foto
         void (async () => {
           let foto: Blob | null = null;
+          let cara: Blob | null = null;
           try {
+            // Recorte alineado para /verify (opcional): se dibuja ya, del mismo cuadro, con los landmarks recientes.
+            const lm = landmarksRef.current;
+            const pCara = lm && performance.now() - lm.t < 500 ? recortarCara(v, lm.puntos) : Promise.resolve(null);
             foto = await capturarFoto(v);
+            // No retrasa la verificación: si el recorte no está listo en ~15 ms, se envía sin él.
+            if (foto) cara = await Promise.race([pCara, new Promise<null>((r) => setTimeout(() => r(null), 15))]);
           } catch {
             foto = null; // toBlob/drawImage pueden lanzar: se trata como captura fallida
           } finally {
             capturando = false;
           }
-          if (foto) capturaRef.current.onCaptura(foto);
+          if (foto) capturaRef.current.onCaptura(foto, cara);
           else {
             activoRef.current = true; // no se pudo leer la cámara: seguir intentando
             capturaRef.current.onCapturaFallida?.();
@@ -307,7 +317,7 @@ export function useRastreoCara({
     };
   }, [listo, video, objetivo, progreso, seguimiento, escenario, rastro, alineacion]);
 
-  return { listo, error, postura, desvio };
+  return { listo, error, postura, desvio, landmarksRef };
 }
 
 // Un solo canvas reutilizado entre capturas (evita reservar memoria de imagen cada vez).

@@ -147,6 +147,10 @@ def asignar_pendiente(pendiente_id: int, jugador_id: int = Form(...), s: Sede = 
             motivo = ("La foto se parece poco a las que ya tiene (¿mala luz, o era otro niño?), "
                       "así que no se usó para aprender.")
     disputa = _resolver_disputa(s, d, jugador_id)
+    try:  # dato de corrección para el modo sombra: a quién asignó el staff la captura de esa verificación
+        s.db.marcar_staff_verificacion(d.get("verificacion_id"), jugador_id)
+    except Exception:
+        pass
     ya = s.db.asistio_hoy(jugador_id, d["timestamp"][:10]) is not None
     if not ya:
         s.db.registrar_asistencia(jugador_id, origen="correccion", timestamp=d["timestamp"])
@@ -192,7 +196,8 @@ def no_soy_yo(request: Request, reporte: str = Form(""), s: Sede = Depends(sede_
         aid = r["asistencia_id"]
         disputada = bool(aid) and s.db.marcar_disputada(aid)
         s.nuevo_pendiente(r["embedding"], r["miniatura"], r["timestamp"], motivo="no_soy_yo",
-                          disputa_de=r["jugador_id"], asistencia_id=aid if disputada else None)
+                          disputa_de=r["jugador_id"], asistencia_id=aid if disputada else None,
+                          verificacion_id=r.get("verificacion_id"))
         s.db.auditar("no_soy_yo", f"jugador #{r['jugador_id']} asistencia #{aid if disputada else '-'}")
     return {"status": "ok"}
 

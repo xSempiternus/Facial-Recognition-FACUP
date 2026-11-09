@@ -385,14 +385,14 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   }, []);
   const alFallarCaptura = useCallback(() => setFase("escaneando"), []);
   const [reintentandoRed, setReintentandoRed] = useState(false);
-  const alCapturar = useCallback(async (foto: Blob) => {
+  const alCapturar = useCallback(async (foto: Blob, cara?: Blob | null) => {
     pendiente.current?.abort();
     const ctl = (pendiente.current = new AbortController());
     setReintentandoRed(false);
     setFotoUrl(URL.createObjectURL(foto)); // el fotograma queda congelado mientras se verifica
     const v = await verificar(foto, ctl.signal, () => {
       if (pendiente.current === ctl) setReintentandoRed(true);
-    });
+    }, cara);
     if (pendiente.current !== ctl) return; // cancelada o reemplazada
     setReintentandoRed(false);
     const { resultado, frase } = aResultado(v);

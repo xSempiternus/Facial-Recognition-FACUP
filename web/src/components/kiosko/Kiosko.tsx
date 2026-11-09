@@ -604,8 +604,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const anterior = useRef<{ postura: Postura; fase: string }>({ postura: "sin-cara", fase: "escaneando" });
   useEffect(() => {
     const a = anterior.current;
-    if (fase === "escaneando" && a.postura === "sin-cara" && postura !== "sin-cara") sonar("rostro");
-
+    // Sin sonido al detectar la cara: sonaba a cada rato y molestaba.
     anterior.current = { postura, fase };
   }, [postura, fase]);
   useEffect(() => {

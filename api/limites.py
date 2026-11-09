@@ -52,6 +52,8 @@ class Limitador:
 INSCRIPCION_IP = Limitador("RL_INSCRIPCION_IP", 6, 3600)
 INSCRIPCION_TOKEN = Limitador("RL_INSCRIPCION_TOKEN", 40, 3600)
 INFO_IP = Limitador("RL_INFO_IP", 60, 600)
+# Lista pública de sedes (selector del panel): solo slug y nombre.
+SEDES_IP = Limitador("RL_SEDES_IP", 60, 600)
 # "No soy yo": estricto (por IP y por sede).
 NO_SOY_YO_IP = Limitador("RL_NO_SOY_YO_IP", 3, 600)
 NO_SOY_YO_SEDE = Limitador("RL_NO_SOY_YO_SEDE", 30, 600)

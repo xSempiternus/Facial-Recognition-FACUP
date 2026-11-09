@@ -200,6 +200,19 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     ta, tb = login("sede-a", PIN_A), login("sede-b", PIN_B)
     check(ta and tb, "login en ambas sedes")
 
+    print("\n== Lista pública de sedes")
+    con = sqlite3.connect(srv.data_dir / "control.db")
+    con.execute("INSERT INTO sedes (slug, nombre, pin_hash, creada_en, activa) VALUES ('sede-off', 'Sede Off', 'x', '2026-01-01', 0)")
+    con.commit()
+    con.close()
+    st, ls = c.req("GET", "/sedes")
+    slugs = [x["slug"] for x in ls] if isinstance(ls, list) else []
+    check(st == 200 and {"sede-a", "sede-b"} <= set(slugs) and "sede-off" not in slugs, "GET /sedes lista solo activas", ls)
+    check(all(set(x) == {"slug", "nombre"} for x in ls) and "pin" not in json.dumps(ls).lower(),
+          "GET /sedes sin campos extra (ni PIN ni conteos)", ls)
+    st, nom = c.req("GET", "/sedes/sede-off")
+    check(st == 404, "sede desactivada no sale en /sedes/<slug>", (st, nom))
+
     print("\n== Enlaces de inscripción")
     st, en = c.req("POST", "/inscripcion/enlaces", token=ta, data={"categoria": "Sub-10", "dias": "7"})
     check(st == 200 and en["ruta"] == f"/s/sede-a/inscripcion?t={en['token']}" and en["expira"], "crear enlace", en)

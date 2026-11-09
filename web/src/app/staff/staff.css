@@ -2712,3 +2712,15 @@ input[type="range"].s-range {
 .s-dialog-b > .s-chips .s-chip {
   height: 40px;
 }
+
+/* Botón de la cabecera para cambiar de sede (visible también en móvil) */
+.s-sede-btn {
+  flex: none;
+  max-width: 40vw;
+  gap: 6px;
+}
+.s-sede-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from api import auth, nucleo, sombra
+from api import auth, limites, nucleo, sombra
 from api.inscripcion import router as inscripcion_router
 from api.metricas import router as metricas_router
 from api.nucleo import (Sede, analizar as _analyze, error as _error, log, obtener_sede as _obtener_sede,
@@ -191,6 +191,13 @@ def login(request: Request, pin: str = Form(...), sede: str = Form("")):
     token = auth.verificar_pin(pin, request, slug)
     info = sedes.obtener(slug)
     return {"token": token, "expira_en": auth.TOKEN_TTL_S, "sede": {"slug": info["slug"], "nombre": info["nombre"]}}
+
+
+@app.get("/sedes")
+def listar_sedes_publicas(request: Request):
+    """Público y mínimo: sedes activas (solo slug y nombre; sin PIN, conteos ni fechas). Alimenta el selector del staff."""
+    limites.SEDES_IP.exigir(auth._cliente(request))
+    return [{"slug": i["slug"], "nombre": i["nombre"]} for i in sedes.listar() if sedes.existe(i["slug"])]
 
 
 @app.get("/sedes/{slug}")

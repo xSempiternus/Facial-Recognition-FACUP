@@ -18,8 +18,9 @@ import { LayoutGroup, MotionConfig, motion } from "motion/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { api, cerrarSesion, escucharPendientes, leerToken, suscribirSesion } from "@/lib/staff-api";
+import { api, cerrarSesion, escucharPendientes, leerToken, listarSedes, suscribirSesion, type SedeLista } from "@/lib/staff-api";
 import { nombreSedeGuardado, rutaSede, sedeGuardada } from "@/lib/sede";
+import { BotonCambiarSede } from "./CambiarSede";
 import { usePendientes } from "./Pendientes";
 import { Skeleton } from "./ui";
 
@@ -80,6 +81,24 @@ function usePendientesSolicitudes(activo: boolean, ruta: string) {
   return n;
 }
 
+/** Sedes activas para el selector (una sola vez por carga). Si falla, no se muestra el botón. */
+function useSedes(activo: boolean) {
+  const [lista, setLista] = useState<SedeLista[]>([]);
+  useEffect(() => {
+    if (!activo) return;
+    let vivo = true;
+    listarSedes()
+      .then((l) => vivo && setLista(l))
+      .catch(() => {
+        /* el selector es opcional */
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [activo]);
+  return lista;
+}
+
 function usePrefColapsado() {
   const [v, setV] = useState(false);
   useEffect(() => {
@@ -108,6 +127,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const [colapsado, setColapsado] = usePrefColapsado();
   const [paleta, setPaleta] = useState(false);
   const sede = useNombreSede();
+  const sedes = useSedes(!!token);
   const pendientes = usePendientesSolicitudes(!!token, ruta);
   const { total: porRevisar } = usePendientes();
 
@@ -207,10 +227,11 @@ export function Shell({ children }: { children: ReactNode }) {
           <header className="s-top">
             <span className="s-logo-full s-mobile-only" role="img" aria-label="FA CUP Chile" />
             <nav className="s-crumbs" aria-label="Ubicación">
-              <span className="hide-sm">{sede ? `Staff · ${sede}` : "Staff"}</span>
+              <span className="hide-sm">{sede && sedes.length < 2 ? `Staff · ${sede}` : "Staff"}</span>
               <ChevronRight size={14} aria-hidden className="hide-sm" />
               <strong>{actual ? MIGAS[actual.href] : "Panel"}</strong>
             </nav>
+            <BotonCambiarSede sedes={sedes} actual={sedeGuardada()} nombre={sede} />
             <button type="button" className="s-search" onClick={() => setPaleta(true)} aria-label="Buscar o ir a… (Ctrl+K)">
               <Search size={14} aria-hidden />
               <span>Ir a…</span>

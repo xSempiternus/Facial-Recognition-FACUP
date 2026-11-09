@@ -275,6 +275,15 @@ export type ResultadoInscripcion = {
 
 // ------------------------------------------------------------------ endpoints
 
+export type SedeLista = { slug: string; nombre: string };
+
+/** Sedes activas (público: solo slug y nombre). Sirve para el selector de sede del panel. */
+export async function listarSedes(): Promise<SedeLista[]> {
+  const resp = await fetch("/api/sedes", { cache: "no-store" });
+  if (!resp.ok) throw await comoError(resp);
+  return (await resp.json()) as SedeLista[];
+}
+
 export async function iniciarSesion(pin: string, sede?: string) {
   let resp: Response;
   const slug = sede ?? sedeActual();

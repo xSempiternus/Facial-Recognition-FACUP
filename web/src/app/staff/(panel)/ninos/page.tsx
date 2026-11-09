@@ -9,6 +9,7 @@ import { BotonAyuda, Tour, type PasoTour } from "@/components/staff/Tour";
 import { Avatar, Badge, BadgeInvitado, Button, ErrorCarga, PageHeader, SkeletonRows, Vacio, useQuery, useRefrescoAlVolver } from "@/components/staff/ui";
 import { api, ordenarCategorias, publicarPendientes, sinTildes, type Jugador } from "@/lib/staff-api";
 import { estadoNino } from "@/lib/staff-api-ninos";
+import { EVENTO_NINOS, type DestinoNinos } from "@/components/staff/Campana";
 import { ParaContactar } from "@/components/staff/ParaContactar";
 import "../../ninos.css";
 import "../../revisar.css";
@@ -51,9 +52,22 @@ export default function Ninos() {
   const [texto, setTexto] = useState("");
   const [cat, setCat] = useState("");
   const [limite, setLimite] = useState(TAMANO);
+  const [solElegida, setSolElegida] = useState<number | undefined>(undefined);
+
+  // la campana del Shell manda aquí (sin cambiar de ruta) a «Por aprobar», a una solicitud o a «Para contactar»
+  useEffect(() => {
+    const f = (e: Event) => {
+      const d = (e as CustomEvent<DestinoNinos>).detail;
+      setPestana(d.pestana);
+      setSolElegida(d.solicitud);
+    };
+    window.addEventListener(EVENTO_NINOS, f);
+    return () => window.removeEventListener(EVENTO_NINOS, f);
+  }, []);
 
   const pestanaUrl: Pestana = ["aprobar", "por-aprobar", "solicitudes"].includes(params.get("pestana") ?? "") ? "aprobar" : "inscritos";
   const pestana = pestanaElegida ?? pestanaUrl;
+  const solUrl = Number(params.get("sol")) || undefined;
   const hojaUrl: Hoja0 = params.has("qr") ? "apoderado" : params.get("agregar") === "camara" ? "camara" : params.has("agregar") ? "agregar" : null;
   const hoja = hojaElegida === undefined ? hojaUrl : hojaElegida;
 
@@ -182,7 +196,7 @@ export default function Ninos() {
           )}
         </section>
       ) : (
-        <ListaPorAprobar datos={data} cargando={q.cargando} onCambio={q.reload} onInvitar={() => setHoja("apoderado")} />
+        <ListaPorAprobar datos={data} cargando={q.cargando} onCambio={q.reload} onInvitar={() => setHoja("apoderado")} abrirId={solElegida ?? solUrl} />
       )}
 
       <FichaNino nino={nino} onCerrar={() => setNinoId(null)} onCambio={q.reload} />

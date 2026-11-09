@@ -22,6 +22,7 @@ import { api, cerrarSesion, escucharPendientes, leerToken, listarSedes, suscribi
 import { nombreSedeGuardado, rutaSede, sedeGuardada } from "@/lib/sede";
 import { apiSeguimiento, escucharAlertas } from "@/lib/staff-api-alertas";
 import { BotonCambiarSede } from "./CambiarSede";
+import { Campana } from "./Campana";
 import { usePendientes } from "./Pendientes";
 import { Skeleton } from "./ui";
 
@@ -68,7 +69,7 @@ function usePendientesSolicitudes(activo: boolean, ruta: string) {
           /* el globo es solo informativo */
         });
     cargar();
-    const t = window.setInterval(cargar, 60_000);
+    const t = window.setInterval(() => document.visibilityState === "visible" && cargar(), 60_000);
     const al = () => document.visibilityState === "visible" && cargar();
     document.addEventListener("visibilitychange", al);
     const off = escucharPendientes((x) => vivo && setN(x));
@@ -96,7 +97,7 @@ function useAlertasPorContactar(activo: boolean, ruta: string) {
           /* el globo es solo informativo (backend viejo: sin /alertas) */
         });
     cargar();
-    const t = window.setInterval(cargar, 120_000);
+    const t = window.setInterval(() => document.visibilityState === "visible" && cargar(), 120_000);
     const al = () => document.visibilityState === "visible" && cargar();
     document.addEventListener("visibilitychange", al);
     const off = escucharAlertas((c) => vivo && setN(c.por_contactar));
@@ -270,6 +271,7 @@ export function Shell({ children }: { children: ReactNode }) {
               <span>Ir a…</span>
               <kbd>Ctrl K</kbd>
             </button>
+            <Campana solicitudes={solicitudes} porContactar={porContactar} porRevisar={porRevisar} />
             <button type="button" className="s-btn ghost icon s-mobile-only" aria-label="Cerrar sesión" onClick={salir}>
               <LogOut size={17} />
             </button>

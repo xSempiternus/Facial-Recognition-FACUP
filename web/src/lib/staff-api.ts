@@ -178,6 +178,8 @@ export type Pendiente = {
   miniatura: string;
   motivo?: MotivoPendiente;
   sugerido: { id: number; nombre: string; similitud: number } | null;
+  /** Qué tan fuerte es la sugerencia (solo si hay sugerido). */
+  parecido?: "alto" | "medio" | "bajo" | null;
   disputa_de?: { id: number; nombre: string | null } | null;
 };
 
@@ -204,6 +206,17 @@ export type Solicitud = {
   miniatura: string;
   duplicado: { jugador_id: number; nombre: string; estado: string; similitud: number | null } | null;
   duplicado_solicitud: { solicitud_id: number; similitud: number | null } | null;
+  /** Invitados con nombre parecido (calculado en el servidor, máx. 3). Ausente en backends viejos. */
+  candidatos_invitado?: CandidatoInvitado[];
+};
+
+export type CandidatoInvitado = {
+  id: number;
+  nombre: string;
+  categoria: string | null;
+  creado_en: string | null;
+  asistencias: number;
+  ultima_asistencia: string | null;
 };
 
 export type Enlace = {

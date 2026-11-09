@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import { hora, textoError } from "@/lib/staff-api";
 import { apiSeguimiento, type ItemRevision, type RevisionHoy } from "@/lib/staff-api-alertas";
 import { MiniaturaPendiente, usePendientes } from "../Pendientes";
+import { PistaInline, PistaOpcion } from "../PistaInline";
 import { Avatar, Button, useToast } from "../ui";
 
 const primerNombre = (n: string) => n.trim().split(/\s+/)[0] ?? n;
@@ -103,6 +104,11 @@ export function RevisarTanda({ clave, onCambio, onCorregir }: { clave: unknown; 
       ) : (
         <div className="rv-b">
           {pendientes > 0 && <p className="muted">Mira la cara del niño y confirma que el nombre es el suyo.</p>}
+          <PistaInline id="revisar-tanda" resumen="La cámara no quedó 100% segura. Tú decides si el nombre es el correcto.">
+            <PistaOpcion nombre="Confirmar:">si la cara de la foto es del niño que dice el nombre.</PistaOpcion>
+            <PistaOpcion nombre="No es él/ella:">si es otro niño. Se anula esa llegada, o eliges quién es.</PistaOpcion>
+            <PistaOpcion nombre="Parecido alto, medio o bajo:">qué tan segura estaba la cámara. Con «medio» o «bajo» mira la foto con más calma antes de confirmar.</PistaOpcion>
+          </PistaInline>
           <ul className="rv-lista">
             {items.map((it) => (
               <li key={`a${it.asistencia_id}`} className="rv-item" data-tono="revisar">
@@ -136,7 +142,7 @@ export function RevisarTanda({ clave, onCambio, onCorregir }: { clave: unknown; 
                     <div className="rv-n">
                       <b>¿Es {s.nombre}?</b>
                       <small>
-                        No lo reconoció seguro · llegó a las <span className="tnum">{hora(p.timestamp)}</span>
+                        No lo reconoció seguro{p.parecido ? ` · parecido ${p.parecido}` : ""} · llegó a las <span className="tnum">{hora(p.timestamp)}</span>
                       </small>
                     </div>
                   </div>

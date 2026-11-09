@@ -4,6 +4,7 @@ import { ArrowRight, BellRing } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { hora } from "@/lib/staff-api";
+import { PistaInline, PistaOpcion } from "../PistaInline";
 import { AccionesPendiente, MiniaturaPendiente, textoMotivo, usePendientes } from "../Pendientes";
 
 const PRIMERAS = 3;
@@ -29,6 +30,12 @@ export function PorRevisarHoy({ solicitudes }: { solicitudes: number }) {
           <p className="muted">
             {lista.length === 1 ? "Una llegada que la cámara no reconoció." : `${lista.length} llegadas que la cámara no reconoció.`} Tú decides quién es.
           </p>
+          <PistaInline id="pendientes-kiosko" resumen="El niño llegó, pero la cámara no supo quién es. Mira la foto y elige.">
+            <PistaOpcion nombre="Es [nombre]:">si la cámara sugiere a alguien y la foto coincide. Se anota su asistencia.</PistaOpcion>
+            <PistaOpcion nombre="Otro jugador:">si es un niño inscrito pero distinto al sugerido. Búscalo por nombre.</PistaOpcion>
+            <PistaOpcion nombre="Niño nuevo:">si viene a probarse y no está inscrito. Queda como invitado, sin guardar su cara.</PistaOpcion>
+            <PistaOpcion nombre="Descartar:">si no era un niño (una foto de paso, un adulto). No se anota nada.</PistaOpcion>
+          </PistaInline>
           <div className="hy-rev-grid">
             {visibles.map((p) => (
               <div key={p.id} className="s-pend" data-motivo={p.motivo ?? "no_reconocido"}>
@@ -41,7 +48,7 @@ export function PorRevisarHoy({ solicitudes }: { solicitudes: number }) {
                     </div>
                     {p.sugerido && p.motivo !== "nino_nuevo" && (
                       <div className="muted" style={{ fontSize: 13 }}>
-                        ¿Será {p.sugerido.nombre}?
+                        ¿Será {p.sugerido.nombre}?{p.parecido ? ` · parecido ${p.parecido}` : ""}
                       </div>
                     )}
                   </div>

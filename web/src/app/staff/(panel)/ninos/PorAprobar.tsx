@@ -1,17 +1,18 @@
 "use client";
 
 // Pestaña «Por aprobar»: inscripciones que mandan las familias. Nada entra hasta que el staff lo aprueba.
+// Aprobar y rechazar se resuelven DENTRO de la tarjeta (nada de ventanas encima, sobre todo en el teléfono).
 
 import { Check, ClipboardCheck, Mail, Phone, TriangleAlert, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { PistaInline, PistaOpcion } from "@/components/staff/PistaInline";
 import { useCategoriasActivas } from "@/components/staff/NinoNuevo";
 import { Alerta, Button, Campo, SkeletonRows, Vacio, useToast } from "@/components/staff/ui";
 import { telefonoLegible } from "@/lib/inscripcion-api";
-import { api, sinTildes, textoError, type Jugador, type Solicitud } from "@/lib/staff-api";
+import { api, diaMes, textoError, type CandidatoInvitado, type Jugador, type Solicitud } from "@/lib/staff-api";
 import { primerNombre } from "@/lib/staff-api-ninos";
-import { Hoja } from "./Hoja";
 
-export type DatosAprobar = { solicitudes: Solicitud[]; invitados: Jugador[] };
+export type DatosAprobar = { solicitudes: Solicitud[]; invitados?: Jugador[] };
 
 const PARENTESCO: Record<string, string> = { madre: "madre", padre: "padre", otro: "apoderado/a" };
 
@@ -32,21 +33,35 @@ export function sugerirCategoria(anio: number | null | undefined, categorias: st
   return subs.find((x) => edad <= x.n)?.c ?? null;
 }
 
+type Modo = { id: number; modo: "aprobar" | "rechazar" };
+
 export function ListaPorAprobar({
   datos,
   cargando,
   onCambio,
   onInvitar,
+  abrirId,
 }: {
   datos: DatosAprobar | undefined;
   cargando: boolean;
   onCambio: () => void;
   onInvitar: () => void;
+  /** Solicitud que se abre sola (viene de la campana). */
+  abrirId?: number;
 }) {
   const notificar = useToast();
-  const [aprobar, setAprobar] = useState<Solicitud | null>(null);
-  const [rechazar, setRechazar] = useState<Solicitud | null>(null);
+  const [abierto, setAbierto] = useState<Modo | null>(null);
   const [ocupada, setOcupada] = useState<number | null>(null);
+  const yaAbierta = useRef<number | undefined>(undefined);
+
+  // una solicitud pedida desde la campana se abre sola, una vez, cuando ya cargó la lista
+  const existe = abrirId !== undefined && !!datos?.solicitudes.some((s) => s.id === abrirId);
+  useEffect(() => {
+    if (!existe || yaAbierta.current === abrirId) return;
+    yaAbierta.current = abrirId;
+    setAbierto({ id: abrirId as number, modo: "aprobar" });
+    window.setTimeout(() => document.getElementById(`sol-${abrirId}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
+  }, [existe, abrirId]);
 
   async function aprobarDirecto(s: Solicitud) {
     setOcupada(s.id);
@@ -61,8 +76,8 @@ export function ListaPorAprobar({
     }
   }
 
-  // Con un posible duplicado, invitados por vincular o sin categoría se abre la hoja; si no, un toque basta.
-  const alAprobar = (s: Solicitud) => (s.duplicado || !s.categoria || (datos?.invitados.length ?? 0) > 0 ? setAprobar(s) : void aprobarDirecto(s));
+  // Con posible duplicado, sin categoría o con invitados parecidos se abre el panel de la tarjeta; si no, un toque basta.
+  const alAprobar = (s: Solicitud) => (s.duplicado || !s.categoria || (s.candidatos_invitado?.length ?? 0) > 0 ? setAbierto({ id: s.id, modo: "aprobar" }) : void aprobarDirecto(s));
 
   if (cargando && !datos) {
     return (
@@ -85,106 +100,118 @@ export function ListaPorAprobar({
 
   return (
     <>
+      <PistaInline id="aprobar" resumen="Mira la foto y los datos, y aprueba. Nada entra hasta que tú lo apruebas.">
+        <PistaOpcion nombre="Aprobar:">si es un niño real y los datos se ven bien. Si falta la categoría, te la pedimos.</PistaOpcion>
+        <PistaOpcion nombre="Rechazar:">si está repetida, la foto no sirve o no es un niño. Se borran sus datos.</PistaOpcion>
+        <PistaOpcion nombre="«¿Ya vino a probarse?»:">solo sale si ya hay un invitado con nombre parecido. Elígelo para que conserve sus asistencias; si no, deja «No, es nuevo/a».</PistaOpcion>
+      </PistaInline>
       <section className="nn-listaaprob" aria-label="Inscripciones por aprobar">
-        {datos.solicitudes.map((s, i) => (
-          <article key={s.id} className="s-card nn-sol" data-tour={i === 0 ? "nn-solicitud" : undefined} aria-label={`Inscripción de ${s.nombre_nino}`}>
-            <div className="nn-sol-top">
-              {s.miniatura ? (
-                // eslint-disable-next-line @next/next/no-img-element -- miniatura en base64
-                <img className="nn-foto" src={`data:image/jpeg;base64,${s.miniatura}`} alt={`Foto de ${s.nombre_nino}`} />
-              ) : (
-                <div className="nn-foto" aria-hidden />
-              )}
-              <div style={{ minWidth: 0 }}>
-                <h3>{s.nombre_nino}</h3>
-                <p>
-                  {s.categoria ?? <span className="nn-completar">Sin categoría · completar</span>}
-                  {s.anio_nacimiento ? ` · ${s.anio_nacimiento}` : ""} · lo inscribe <b style={{ color: "var(--fg)", fontWeight: 550 }}>{s.tutor_nombre}</b>
-                  {s.tutor_parentesco ? ` (${PARENTESCO[s.tutor_parentesco] ?? s.tutor_parentesco})` : ""}
-                </p>
-                {s.tutor_correo || s.tutor_telefono ? (
-                  <p className="nn-contacto">
-                    {s.tutor_correo && (
-                      <span>
-                        <Mail size={13} aria-hidden /> {s.tutor_correo}
-                      </span>
-                    )}
-                    {s.tutor_telefono && (
-                      <span>
-                        <Phone size={13} aria-hidden /> {telefonoLegible(s.tutor_telefono)}
-                      </span>
-                    )}
-                  </p>
+        {datos.solicitudes.map((s, i) => {
+          const modo = abierto?.id === s.id ? abierto.modo : null;
+          return (
+            <article key={s.id} id={`sol-${s.id}`} className="s-card nn-sol" data-tour={i === 0 ? "nn-solicitud" : undefined} aria-label={`Inscripción de ${s.nombre_nino}`}>
+              <div className="nn-sol-top">
+                {s.miniatura ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- miniatura en base64
+                  <img className="nn-foto" src={`data:image/jpeg;base64,${s.miniatura}`} alt={`Foto de ${s.nombre_nino}`} />
                 ) : (
-                  s.tutor_contacto && <p>{s.tutor_contacto}</p>
+                  <div className="nn-foto" aria-hidden />
                 )}
-                {s.acepta_comunicaciones !== undefined && <p className="nn-com">{s.acepta_comunicaciones ? "Acepta recibir comunicaciones" : "No autorizó comunicaciones: no contactar por campañas"}</p>}
-              </div>
-            </div>
-            {s.duplicado && (
-              <div className="s-alert warn">
-                <TriangleAlert size={16} aria-hidden />
-                <div>
-                  <b>Se parece a {s.duplicado.nombre}</b>, que {s.duplicado.estado === "invitado" ? "está como invitado" : "ya está inscrito"}. Revisa que no sea el mismo niño.
+                <div style={{ minWidth: 0 }}>
+                  <h3>{s.nombre_nino}</h3>
+                  <p>
+                    {s.categoria ?? <span className="nn-completar">Sin categoría · completar</span>}
+                    {s.anio_nacimiento ? ` · ${s.anio_nacimiento}` : ""} · lo inscribe <b style={{ color: "var(--fg)", fontWeight: 550 }}>{s.tutor_nombre}</b>
+                    {s.tutor_parentesco ? ` (${PARENTESCO[s.tutor_parentesco] ?? s.tutor_parentesco})` : ""}
+                  </p>
+                  {s.tutor_correo || s.tutor_telefono ? (
+                    <p className="nn-contacto">
+                      {s.tutor_correo && (
+                        <span>
+                          <Mail size={13} aria-hidden /> {s.tutor_correo}
+                        </span>
+                      )}
+                      {s.tutor_telefono && (
+                        <span>
+                          <Phone size={13} aria-hidden /> {telefonoLegible(s.tutor_telefono)}
+                        </span>
+                      )}
+                    </p>
+                  ) : (
+                    s.tutor_contacto && <p>{s.tutor_contacto}</p>
+                  )}
+                  {s.acepta_comunicaciones !== undefined && <p className="nn-com">{s.acepta_comunicaciones ? "Acepta recibir comunicaciones" : "No autorizó comunicaciones: no contactar por campañas"}</p>}
                 </div>
               </div>
-            )}
-            {s.duplicado_solicitud && datos.solicitudes.some((o) => o.id === s.duplicado_solicitud?.solicitud_id) && (
-              <div className="s-alert warn">
-                <TriangleAlert size={16} aria-hidden />
-                <div>Se parece a otra inscripción por aprobar: puede que la familia la enviara dos veces.</div>
-              </div>
-            )}
-            {!s.compatible && <Alerta>No se puede aprobar: se tomó con una versión anterior del reconocimiento. Recházala y envía un enlace nuevo a la familia.</Alerta>}
-            <div className="nn-sol-acc">
-              <Button variante="brand" disabled={!s.compatible} cargando={ocupada === s.id} onClick={() => alAprobar(s)}>
-                {ocupada !== s.id && <Check size={16} aria-hidden />} Aprobar
-              </Button>
-              <Button disabled={ocupada === s.id} onClick={() => setRechazar(s)}>
-                <X size={16} aria-hidden /> Rechazar
-              </Button>
-            </div>
-          </article>
-        ))}
-      </section>
+              {s.duplicado && (
+                <div className="s-alert warn">
+                  <TriangleAlert size={16} aria-hidden />
+                  <div>
+                    <b>Se parece a {s.duplicado.nombre}</b>, que {s.duplicado.estado === "invitado" ? "está como invitado" : "ya está inscrito"}. Revisa que no sea el mismo niño.
+                  </div>
+                </div>
+              )}
+              {s.duplicado_solicitud && datos.solicitudes.some((o) => o.id === s.duplicado_solicitud?.solicitud_id) && (
+                <div className="s-alert warn">
+                  <TriangleAlert size={16} aria-hidden />
+                  <div>Se parece a otra inscripción por aprobar: puede que la familia la enviara dos veces.</div>
+                </div>
+              )}
+              {!s.compatible && <Alerta>No se puede aprobar: se tomó con una versión anterior del reconocimiento. Recházala y envía un enlace nuevo a la familia.</Alerta>}
 
-      {aprobar && (
-        <HojaAprobar
-          key={aprobar.id}
-          s={aprobar}
-          invitados={datos.invitados}
-          onCerrar={() => setAprobar(null)}
-          onListo={() => {
-            setAprobar(null);
-            onCambio();
-          }}
-        />
-      )}
-      {rechazar && (
-        <HojaRechazar
-          key={rechazar.id}
-          s={rechazar}
-          onCerrar={() => setRechazar(null)}
-          onListo={() => {
-            setRechazar(null);
-            onCambio();
-          }}
-        />
-      )}
+              {modo === "aprobar" && (
+                <FormAprobar
+                  s={s}
+                  onCerrar={() => setAbierto(null)}
+                  onListo={() => {
+                    setAbierto(null);
+                    onCambio();
+                  }}
+                />
+              )}
+              {modo === "rechazar" && (
+                <FormRechazar
+                  s={s}
+                  onCerrar={() => setAbierto(null)}
+                  onListo={() => {
+                    setAbierto(null);
+                    onCambio();
+                  }}
+                />
+              )}
+              {modo === null && (
+                <div className="nn-sol-acc">
+                  <Button variante="brand" disabled={!s.compatible} cargando={ocupada === s.id} onClick={() => alAprobar(s)}>
+                    {ocupada !== s.id && <Check size={16} aria-hidden />} Aprobar
+                  </Button>
+                  <Button disabled={ocupada === s.id} onClick={() => setAbierto({ id: s.id, modo: "rechazar" })}>
+                    <X size={16} aria-hidden /> Rechazar
+                  </Button>
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </section>
     </>
   );
 }
 
-function HojaAprobar({ s, invitados, onCerrar, onListo }: { s: Solicitud; invitados: Jugador[]; onCerrar: () => void; onListo: () => void }) {
+const asistenciasTxt = (n: number) => (n === 1 ? "conservará 1 asistencia" : `conservará ${n} asistencias`);
+
+/** Panel de aprobar dentro de la tarjeta: niño -> categoría -> «¿Ya vino a probarse?» (solo con coincidencias). */
+function FormAprobar({ s, onCerrar, onListo }: { s: Solicitud; onCerrar: () => void; onListo: () => void }) {
   const notificar = useToast();
   const categorias = useCategoriasActivas();
   const [nombre, setNombre] = useState(s.nombre_nino);
   const [categoria, setCategoria] = useState(s.categoria ?? "");
-  const [invitadoId, setInvitadoId] = useState<number>(() => invitados.find((i) => sinTildes(i.nombre) === sinTildes(s.nombre_nino) && (!s.categoria || i.categoria === s.categoria))?.id ?? 0);
+  const [invitadoId, setInvitadoId] = useState(0);
   const [trabajando, setTrabajando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const grupo = useId();
+  const candidatos: CandidatoInvitado[] = s.candidatos_invitado ?? [];
   const opciones = s.categoria && !categorias.includes(s.categoria) ? [s.categoria, ...categorias] : categorias;
-  const elegido = invitados.find((i) => i.id === invitadoId);
+  const elegido = candidatos.find((i) => i.id === invitadoId);
   const falta = !s.categoria;
   const sugerida = falta ? sugerirCategoria(s.anio_nacimiento, categorias) : null;
 
@@ -202,24 +229,7 @@ function HojaAprobar({ s, invitados, onCerrar, onListo }: { s: Solicitud; invita
   }
 
   return (
-    <Hoja
-      abierto
-      onCerrar={onCerrar}
-      titulo={`Aprobar a ${primerNombre(s.nombre_nino)}`}
-      pie={
-        <>
-          <Button onClick={onCerrar}>Cancelar</Button>
-          <Button variante="primary" cargando={trabajando} disabled={nombre.trim().length < 2} onClick={enviar}>
-            Aprobar
-          </Button>
-        </>
-      }
-    >
-      {s.duplicado && (
-        <Alerta>
-          Se parece a <b>{s.duplicado.nombre}</b>, que {s.duplicado.estado === "invitado" ? "está como invitado" : "ya está inscrito"}. Si es el mismo niño, mejor rechaza esta inscripción.
-        </Alerta>
-      )}
+    <div className="nn-inline" role="group" aria-label={`Aprobar a ${primerNombre(s.nombre_nino)}`}>
       {error && <Alerta tono="err">{error}</Alerta>}
       <Campo etiqueta="Nombre y apellido del niño">
         {(id) => <input id={id} className="s-input" value={nombre} maxLength={60} autoComplete="off" onChange={(e) => setNombre(e.target.value)} />}
@@ -246,27 +256,47 @@ function HojaAprobar({ s, invitados, onCerrar, onListo }: { s: Solicitud; invita
           </Button>
         )}
       </div>
-      {invitados.length > 0 && (
-        <Campo etiqueta="¿Vino a probarse antes?" ayuda="Elígelo para que conserve las asistencias que ya tenía.">
-          {(id) => (
-            <select id={id} className="s-select" value={invitadoId} onChange={(e) => setInvitadoId(Number(e.target.value))}>
-              <option value={0}>No, es nuevo</option>
-              {invitados.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.nombre}
-                  {i.categoria ? ` · ${i.categoria}` : ""}
-                </option>
-              ))}
-            </select>
-          )}
-        </Campo>
+      {candidatos.length > 0 && (
+        <fieldset className="nn-prueba">
+          <legend>¿Ya vino a probarse?</legend>
+          <p className="muted">Hay un invitado con un nombre parecido. Si es el mismo, elígelo para que no pierda sus asistencias.</p>
+          <label className="nn-op">
+            <input type="radio" name={grupo} checked={invitadoId === 0} onChange={() => setInvitadoId(0)} />
+            <span>
+              <b>No, es nuevo/a</b>
+            </span>
+          </label>
+          {candidatos.map((c) => {
+            const dia = (c.ultima_asistencia ?? c.creado_en ?? "").slice(0, 10);
+            return (
+              <label key={c.id} className="nn-op">
+                <input type="radio" name={grupo} checked={invitadoId === c.id} onChange={() => setInvitadoId(c.id)} />
+                <span>
+                  <b>{c.nombre}</b>
+                  <small>
+                    {c.categoria ?? "Sin categoría"}
+                    {dia ? ` · vino el ${diaMes(dia)}` : ""} · {asistenciasTxt(c.asistencias)}
+                  </small>
+                </span>
+              </label>
+            );
+          })}
+        </fieldset>
       )}
       {elegido && <p className="muted">Se activa a «{elegido.nombre}» con los datos de arriba.</p>}
-    </Hoja>
+      <div className="nn-sol-acc">
+        <Button variante="primary" cargando={trabajando} disabled={nombre.trim().length < 2} onClick={enviar}>
+          <Check size={16} aria-hidden /> Aprobar a {primerNombre(nombre.trim() || s.nombre_nino)}
+        </Button>
+        <Button disabled={trabajando} onClick={onCerrar}>
+          Cancelar
+        </Button>
+      </div>
+    </div>
   );
 }
 
-function HojaRechazar({ s, onCerrar, onListo }: { s: Solicitud; onCerrar: () => void; onListo: () => void }) {
+function FormRechazar({ s, onCerrar, onListo }: { s: Solicitud; onCerrar: () => void; onListo: () => void }) {
   const notificar = useToast();
   const [motivo, setMotivo] = useState("");
   const [trabajando, setTrabajando] = useState(false);
@@ -286,19 +316,7 @@ function HojaRechazar({ s, onCerrar, onListo }: { s: Solicitud; onCerrar: () => 
   }
 
   return (
-    <Hoja
-      abierto
-      onCerrar={onCerrar}
-      titulo="¿Rechazar inscripción?"
-      pie={
-        <>
-          <Button onClick={onCerrar}>No, volver</Button>
-          <Button variante="danger" cargando={trabajando} onClick={enviar}>
-            Sí, rechazar
-          </Button>
-        </>
-      }
-    >
+    <div className="nn-inline" role="group" aria-label={`Rechazar la inscripción de ${s.nombre_nino}`}>
       <Alerta>
         Se borran para siempre los datos y la foto de <b>{s.nombre_nino}</b>. La familia tendrá que enviar otra inscripción.
       </Alerta>
@@ -306,6 +324,14 @@ function HojaRechazar({ s, onCerrar, onListo }: { s: Solicitud; onCerrar: () => 
       <Campo etiqueta="Motivo (opcional)" ayuda="Solo queda en el registro interno.">
         {(id) => <input id={id} className="s-input" value={motivo} maxLength={150} placeholder="Ej: estaba repetida" autoComplete="off" onChange={(e) => setMotivo(e.target.value)} />}
       </Campo>
-    </Hoja>
+      <div className="nn-sol-acc">
+        <Button variante="danger" cargando={trabajando} onClick={enviar}>
+          Sí, rechazar
+        </Button>
+        <Button disabled={trabajando} onClick={onCerrar}>
+          No, volver
+        </Button>
+      </div>
+    </div>
   );
 }

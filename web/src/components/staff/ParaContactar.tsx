@@ -8,6 +8,7 @@ import { Mail, Phone, PhoneCall, StickyNote, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { diaMes, textoError } from "@/lib/staff-api";
 import { apiSeguimiento, publicarAlertas, type Alerta, type EstadoAlerta } from "@/lib/staff-api-alertas";
+import { PistaInline, PistaOpcion } from "./PistaInline";
 import { Avatar, Button, useToast } from "./ui";
 
 const CADA_MS = 60_000;
@@ -93,6 +94,11 @@ export function ParaContactar({ id }: { id?: string }) {
         </h2>
         <p className="tnum">{pend > 0 ? `${pend} por llamar · ${lista.length} abiertas` : `${lista.length} abiertas, todas contactadas`}</p>
       </div>
+      <PistaInline id="contactar" resumen="Son niños que faltaron varias veces seguidas. Llama o escribe a la familia y marca cómo va.">
+        <PistaOpcion nombre="Nueva / Vista:">todavía no hablas con la familia.</PistaOpcion>
+        <PistaOpcion nombre="Contactada:">ya hablaste; el aviso sigue abierto por si falta de nuevo.</PistaOpcion>
+        <PistaOpcion nombre="Cerrar:">cuando ya no hace falta seguirlo (volvió, o se retiró).</PistaOpcion>
+      </PistaInline>
       <ul className="rv-lista">
         {lista.map((a) => {
           const c = a.contacto;

@@ -22,6 +22,7 @@ from api.auth import _cliente
 from api.nucleo import (Sede, analizar, error, log, plantillas_sombra as _plantillas_sombra, precalentar_nombre,
                         sede_publica, sede_staff)
 from src import cv_engine, db_manager
+from src.candidatos import candidatos_invitado
 from src.db_flujos import PARENTESCOS, contacto_legado, normalizar_correo, normalizar_telefono_cl
 
 router = APIRouter()
@@ -272,7 +273,9 @@ def listar_solicitudes(s: Sede = Depends(sede_staff)):
     s.db.purgar_solicitudes()
     modelo = s.config["modelo"]
     salida = []
-    for d in s.db.listar_solicitudes():
+    solicitudes = s.db.listar_solicitudes()
+    invitados = [j for j in s.db.list_jugadores(modelo) if j["estado"] == "invitado"] if solicitudes else []
+    for d in solicitudes:
         jug = s.jugadores.get(d["duplicado_de_id"]) if d["duplicado_de_id"] else None
         salida.append({
             "id": d["id"], "codigo": d["codigo"], "creado_en": d["creado_en"],
@@ -287,6 +290,8 @@ def listar_solicitudes(s: Sede = Depends(sede_staff)):
             "duplicado_solicitud": ({"solicitud_id": d["duplicado_solicitud_id"],
                                      "similitud": d["duplicado_solicitud_similitud"]}
                                     if d["duplicado_solicitud_id"] else None),
+            # Invitados con nombre parecido (misma categoría o sin categoría), para «¿Vino a probarse antes?».
+            "candidatos_invitado": candidatos_invitado(d["nombre_nino"], d["categoria"], invitados),
         })
     return salida
 

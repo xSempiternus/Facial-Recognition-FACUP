@@ -526,6 +526,28 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     st, b = c.req("POST", "/solicitudes/999/aprobar", token=ta, data={"invitado_id": str(id_a)})
     check(st == 404, "aprobar solicitud inexistente -> 404", (st, b))
 
+    print("\n== Candidatos a invitado (¿vino a probarse antes?)")
+    sys.path.insert(0, str(ROOT))
+    from datetime import datetime as _dt
+    from src.candidatos import candidatos_invitado as _cand
+    hoy_ = _dt(2026, 6, 15)
+    inv_ = [
+        {"id": 1, "nombre": "Amaro Vidal", "categoria": "Sub-8", "creado_en": "2026-06-10T10:00:00", "asistencias": 1},
+        {"id": 2, "nombre": "Bastián Ossa", "categoria": "Sub-10", "creado_en": "2026-06-12T10:00:00", "asistencias": 2},
+        {"id": 3, "nombre": "Emilio Pérez", "categoria": "Sub-10", "creado_en": "2026-06-12T10:00:00", "asistencias": 2},
+        {"id": 4, "nombre": "emilio perez soto", "categoria": "Sub-10", "creado_en": "2026-01-01T10:00:00", "asistencias": 1},
+        {"id": 5, "nombre": "Emilio Pérez", "categoria": "Sub-12", "creado_en": "2026-06-12T10:00:00", "asistencias": 1},
+        {"id": 6, "nombre": "Emilo Perez", "categoria": None, "creado_en": "2026-06-14T10:00:00", "asistencias": 1},
+    ]
+    r_ = _cand("Emilio Pérez Soto", "Sub-10", inv_, hoy_)
+    check([c["id"] for c in r_][:2] == [4, 3] or [c["id"] for c in r_][0] in (3, 4), "candidatos: parecidos y misma categoría primero", r_)
+    check(all(c["id"] not in (1, 2, 5) for c in r_), "candidatos: sin parecido o de otra categoría no aparecen", r_)
+    check(len(r_) <= 3, "candidatos: máximo 3", r_)
+    check(_cand("Emilio P.", None, inv_, hoy_) != [], "candidatos: apellido abreviado y sin categoría")
+    check(_cand("Zacarías Nuevo", "Sub-10", inv_, hoy_) == [], "candidatos: nombre sin parecido -> ninguno")
+    st, sols_ = c.req("GET", "/solicitudes", token=ta)
+    check(st == 200 and all(isinstance(x.get("candidatos_invitado"), list) for x in sols_), "GET /solicitudes trae candidatos_invitado", (st, sols_))
+
     print("\n== Anular asistencia y PATCH jugador")
     st, asis = c.req("GET", "/asistencias", token=ta, params={"hoy": "true"})
     aid_d = next(a["id"] for a in asis if a["jugador_id"] == inv2["id"])

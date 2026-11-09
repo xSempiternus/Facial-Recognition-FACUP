@@ -164,6 +164,17 @@ export function useTour(id: string) {
   return { abrir, cerrar, abierto, visto };
 }
 
+/** Pistas inline descartables (PistaInline): comparten el registro de «visto» de los tours (por sede, servidor + local). */
+export function usePistaVista(id: string) {
+  const visto = useSyncExternalStore(
+    suscribir,
+    () => !cargadas || esVisto(id), // hasta saber qué vio la sede no se muestra: sin parpadeos
+    () => true,
+  );
+  const descartar = useCallback(() => marcarVisto(id), [id]);
+  return [visto, descartar] as const;
+}
+
 // ------------------------------------------------------------------ botón de ayuda
 
 /** Abre la guía de la pantalla. Lleva un punto sutil de «nuevo» hasta que se abre por primera vez. */

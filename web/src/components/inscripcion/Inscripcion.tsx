@@ -137,6 +137,8 @@ export default function Inscripcion({ sede }: { sede: string }) {
 
   const carga: Carga = token === "" ? { estado: "invalido" } : res && res.clave === clave ? res.r : { estado: "cargando" };
 
+  // Solo en desarrollo (se elimina del build): ?t=demo-fotos abre directo el paso de fotos para revisar la UI sin enlace real.
+  if (process.env.NODE_ENV !== "production" && token === "demo-fotos") return <Formulario info={INFO_DEMO} token={token} pasoInicial={P.fotos} />;
   if (carga.estado === "ok" && token) return <Formulario info={carga.info} token={token} />;
   return (
     <MotionConfig reducedMotion="user">
@@ -176,8 +178,17 @@ export default function Inscripcion({ sede }: { sede: string }) {
   );
 }
 
-function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
-  const [paso, setPaso] = useState<number>(P.bienvenida);
+const INFO_DEMO: InfoInscripcion = {
+  sede: { slug: "demo", nombre: "Demo" },
+  categorias: [],
+  categoria_fija: null,
+  expira: "2099-01-01",
+  consentimiento: { version: "demo", texto: "" },
+  fotos: { minimo: 2, maximo: 3, max_mb: 8 },
+};
+
+function Formulario({ info, token, pasoInicial = P.bienvenida }: { info: InfoInscripcion; token: string; pasoInicial?: number }) {
+  const [paso, setPaso] = useState<number>(pasoInicial);
   // Hijo/a
   const [nombre, setNombre] = useState("");
   const [anio, setAnio] = useState("");
@@ -307,7 +318,6 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
     setPaso(P.hijo);
   }
 
-  const nFotos = fotos.filter(Boolean).length;
   const etapa = ETAPA_DE_PASO[paso];
   const campoErr = (c: Campo) => (errores[c] ? { "aria-invalid": true as const, "aria-describedby": `${ID_CAMPO[c]}-err` } : {});
   const msgCampo = (c: Campo) =>
@@ -326,7 +336,8 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
   return (
     <MotionConfig reducedMotion="user">
       <Fondo>
-        <section className="ins-panel" aria-label="Inscripción">
+        {/* En el paso de fotos manda la pantalla completa (portal): el panel queda inerte detrás. */}
+        <section className="ins-panel" aria-label="Inscripción" inert={paso === P.fotos}>
           <ol className="ins-etapas" aria-label="Progreso de la inscripción">
             {ETAPAS.map((t, i) => (
               <li key={t} data-on={i <= etapa ? "" : undefined} aria-current={i === etapa ? "step" : undefined}>
@@ -531,7 +542,22 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
                   </>
                 )}
 
-                {paso === P.fotos && <FotosPaso titulo={titulo} fotos={fotos} setFotos={setFotos} malas={malas} setMalas={setMalas} maxMb={info.fotos.max_mb} alerta={alerta} />}
+                {paso === P.fotos && (
+                  <FotosPaso
+                    titulo={titulo}
+                    fotos={fotos}
+                    setFotos={setFotos}
+                    malas={malas}
+                    setMalas={setMalas}
+                    maxMb={info.fotos.max_mb}
+                    minimo={info.fotos.minimo}
+                    alerta={alerta}
+                    enviando={enviando}
+                    reintentar={errorEnvio?.codigo === "red"}
+                    onEnviar={enviar}
+                    onCerrar={() => setPaso(P.autorizacion)}
+                  />
+                )}
 
                 {paso === P.listo && (
                   <>
@@ -584,12 +610,6 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
             {paso === P.autorizacion && (
               <button type="button" className="ins-btn" disabled={!acepta} onClick={() => setPaso(P.fotos)}>
                 Continuar a las fotos
-              </button>
-            )}
-            {paso === P.fotos && (
-              <button type="button" className="ins-btn" disabled={nFotos < info.fotos.minimo || enviando} aria-busy={enviando} onClick={enviar}>
-                {enviando ? <Loader2 size={20} className="s-spin" aria-hidden /> : null}
-                {enviando ? "Enviando…" : errorEnvio?.codigo === "red" ? "Reintentar envío" : "Enviar inscripción"}
               </button>
             )}
             {paso === P.listo && (

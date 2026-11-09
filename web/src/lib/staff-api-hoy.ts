@@ -17,6 +17,10 @@ export type MetricasHoy = {
   por_revisar: { pendientes: number; solicitudes: number };
   ultima_llegada: string | null;
   acumulado: { hora: string; total: number }[];
+  /** Alertas «Para contactar» abiertas (aditivo: backend nuevo). */
+  alertas?: { abiertas: number; por_contactar: number };
+  /** Revisión de la tanda: asistencias faciales de hoy revisadas por el staff (aditivo: backend nuevo). */
+  revision?: { total: number; revisados: number; seguros_sin_revisar: number; por_revisar: number };
 };
 
 export async function metricasHoy(): Promise<MetricasHoy> {

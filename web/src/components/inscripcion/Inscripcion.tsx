@@ -1,24 +1,38 @@
 "use client";
 
-// Formulario público para padres (/s/<sede>/inscripcion?t=<token>): bienvenida -> datos -> consentimiento -> fotos -> listo.
-// Misma estética que el menú: foto de fondo, cristal oscuro, verde de marca. Pensado para el teléfono en la mano.
+// Formulario público para padres (/s/<sede>/inscripcion?t=<token>): bienvenida -> Hijo/a -> Apoderado (datos y
+// autorizaciones) -> Fotos -> Listo. Misma estética que el menú: foto de fondo, cristal oscuro, verde de marca.
+// Pensado para el teléfono en la mano. Sin sonidos. "Inscribir a otro hijo/a" reutiliza los datos del apoderado
+// solo en memoria del navegador (no se guarda nada extra en el servidor ni en el almacenamiento local).
 
 import { AnimatePresence, MotionConfig, motion, useMotionValue } from "motion/react";
-import { ArrowLeft, CheckCircle2, Loader2, Lock, ScanFace, ShieldCheck } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, Lock, ScanFace, Timer, UserPlus } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import FondoVivo from "@/components/kiosko/FondoVivo";
 import { iniciarCalidad } from "@/components/kiosko/calidad";
-import { enviarInscripcion, ErrorInscripcion, infoInscripcion, type InfoInscripcion } from "@/lib/inscripcion-api";
-import { iniciarSonidos, sonar } from "@/lib/sonidos";
+import {
+  enviarInscripcion,
+  ErrorInscripcion,
+  infoInscripcion,
+  normalizarCorreo,
+  normalizarTelefono,
+  telefonoLegible,
+  type InfoInscripcion,
+  type Parentesco,
+} from "@/lib/inscripcion-api";
 import { FotosPaso, type Foto } from "./Fotos";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 const NOMBRE_RE = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ' .-]{1,59}$/;
-const EMAIL_RE = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$/;
-const TEL_RE = /^\+?[0-9]{8,15}$/;
+const NO_SE = "__no_se"; // "No estoy seguro/a": la categoría queda pendiente y la completa el staff al aprobar
 
-type Campo = "nombre" | "anio" | "categoria" | "tutor" | "contacto";
+// Pasos internos y la etapa que muestra la barra de progreso.
+const P = { bienvenida: 0, hijo: 1, apoderado: 2, autorizacion: 3, fotos: 4, listo: 5 } as const;
+const ETAPAS = ["Hijo/a", "Apoderado", "Fotos", "Listo"] as const;
+const ETAPA_DE_PASO = [-1, 0, 1, 1, 2, 3];
+
+type Campo = "nombre" | "anio" | "categoria" | "tutor" | "parentesco" | "correo" | "telefono";
 type Errores = Partial<Record<Campo, string>>;
 type Carga = { estado: "cargando" } | { estado: "invalido" } | { estado: "red"; mensaje: string } | { estado: "ok"; info: InfoInscripcion };
 
@@ -27,22 +41,51 @@ const CAMPO_SERVIDOR: Record<string, Campo> = {
   anio_nacimiento: "anio",
   categoria: "categoria",
   tutor_nombre: "tutor",
-  tutor_contacto: "contacto",
+  tutor_parentesco: "parentesco",
+  tutor_correo: "correo",
+  tutor_telefono: "telefono",
+  tutor_contacto: "correo",
 };
-const ID_CAMPO: Record<Campo, string> = { nombre: "ins-nombre", anio: "ins-anio", categoria: "ins-categoria", tutor: "ins-tutor", contacto: "ins-contacto" };
+const ID_CAMPO: Record<Campo, string> = {
+  nombre: "ins-nombre",
+  anio: "ins-anio",
+  categoria: "ins-categoria",
+  tutor: "ins-tutor",
+  parentesco: "ins-parentesco-madre",
+  correo: "ins-correo",
+  telefono: "ins-telefono",
+};
+const PASO_DE_CAMPO: Record<Campo, number> = { nombre: P.hijo, anio: P.hijo, categoria: P.hijo, tutor: P.apoderado, parentesco: P.apoderado, correo: P.apoderado, telefono: P.apoderado };
+const PARENTESCOS: { valor: Exclude<Parentesco, "">; texto: string }[] = [
+  { valor: "madre", texto: "Madre" },
+  { valor: "padre", texto: "Padre" },
+  { valor: "otro", texto: "Otro" },
+];
 
-function validar(d: { nombre: string; anio: string; tutor: string; contacto: string }): Errores {
+const limpio = (s: string) => s.split(/\s+/).filter(Boolean).join(" ");
+
+function validarHijo(d: { nombre: string; anio: string; categoria: string }, pideCategoria: boolean): Errores {
   const e: Errores = {};
-  const nombre = d.nombre.split(/\s+/).filter(Boolean).join(" ");
+  const nombre = limpio(d.nombre);
   if (!NOMBRE_RE.test(nombre) || !nombre.includes(" ")) e.nombre = "Escribe el nombre y apellido del niño o niña (solo letras).";
   const anio = Number(d.anio);
   const hoy = new Date().getFullYear();
   if (!/^\d{4}$/.test(d.anio) || anio < hoy - 18 || anio > hoy - 2) e.anio = `Escribe un año válido, entre ${hoy - 18} y ${hoy - 2}.`;
-  if (!NOMBRE_RE.test(d.tutor.split(/\s+/).filter(Boolean).join(" "))) e.tutor = "Escribe tu nombre completo (solo letras).";
-  const c = d.contacto.trim();
-  const okContacto = c.includes("@") ? c.length <= 254 && EMAIL_RE.test(c) : TEL_RE.test(c.replace(/[\s().-]/g, ""));
-  if (!okContacto) e.contacto = "Escribe un correo o un teléfono válido.";
+  if (pideCategoria && !d.categoria) e.categoria = "Elige la categoría o «No estoy seguro/a».";
   return e;
+}
+
+function validarApoderado(d: { tutor: string; correo: string; telefono: string }): Errores {
+  const e: Errores = {};
+  if (!NOMBRE_RE.test(limpio(d.tutor))) e.tutor = "Escribe tu nombre completo (solo letras).";
+  if (!normalizarCorreo(d.correo)) e.correo = "Revisa el correo: debe ser como nombre@dominio.cl.";
+  if (!normalizarTelefono(d.telefono)) e.telefono = "Revisa el celular: 9 dígitos que empiezan con 9 (ej: 9 1234 5678).";
+  return e;
+}
+
+function fechaCorta(iso: string): string {
+  const d = new Date(iso.replace(" ", "T"));
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("es-CL", { day: "numeric", month: "long" });
 }
 
 function Fondo({ children }: { children: React.ReactNode }) {
@@ -110,7 +153,7 @@ export default function Inscripcion({ sede }: { sede: string }) {
                 <h1 className="ins-h" tabIndex={-1}>
                   Enlace no válido
                 </h1>
-                <p className="ins-p">Este enlace no es válido o venció. Pide uno nuevo al staff.</p>
+                <p className="ins-p">Este enlace no es válido o venció. Pide uno nuevo al staff de la sede.</p>
               </>
             )}
             {carga.estado === "red" && (
@@ -134,25 +177,36 @@ export default function Inscripcion({ sede }: { sede: string }) {
 }
 
 function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
-  const [paso, setPaso] = useState(0); // 0 bienvenida, 1 datos, 2 consentimiento, 3 fotos, 4 listo
+  const [paso, setPaso] = useState<number>(P.bienvenida);
+  // Hijo/a
   const [nombre, setNombre] = useState("");
   const [anio, setAnio] = useState("");
-  const [categoria, setCategoria] = useState(info.categoria_fija ?? "");
+  const [categoria, setCategoria] = useState(""); // "" sin elegir, NO_SE, o el nombre
+  // Apoderado (se conserva al inscribir otro hijo/a)
   const [tutor, setTutor] = useState("");
-  const [contacto, setContacto] = useState("");
+  const [parentesco, setParentesco] = useState<Parentesco>("");
+  const [correo, setCorreo] = useState("");
+  const [telefono, setTelefono] = useState("");
+  // Autorizaciones (por cada niño: se vuelven a pedir, nunca premarcadas)
   const [acepta, setAcepta] = useState(false);
+  const [aceptaCom, setAceptaCom] = useState(false);
+
   const [errores, setErrores] = useState<Errores>({});
   const [fotos, setFotos] = useState<(Foto | null)[]>([null, null, null]);
   const [malas, setMalas] = useState<number[]>([]);
   const [enviando, setEnviando] = useState(false);
   const [errorEnvio, setErrorEnvio] = useState<ErrorInscripcion | null>(null);
   const [codigo, setCodigo] = useState("");
+  const [enviados, setEnviados] = useState<string[]>([]); // nombres ya enviados en esta visita
   const cuerpo = useRef<HTMLDivElement>(null);
   const titulo = useRef<HTMLHeadingElement>(null);
   const envio = useRef(false);
 
   const nombreSede = /^sede\s/i.test(info.sede.nombre) ? info.sede.nombre : `Sede ${info.sede.nombre}`;
   const fijo = Boolean(info.categoria_fija);
+  const pideCategoria = !fijo && info.categorias.length > 0;
+  const otro = enviados.length > 0;
+  const primerNombre = limpio(nombre).split(" ")[0] || "tu hijo/a";
 
   // Al cambiar de paso: arriba del todo y el foco al título (lectores de pantalla anuncian el paso).
   useEffect(() => {
@@ -160,26 +214,32 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
     titulo.current?.focus({ preventScroll: true });
   }, [paso]);
 
-  function ir(n: number) {
-    sonar(n > paso ? "tap" : "volver");
-    setPaso(n);
+  // Si el envío falla, la alerta puede quedar bajo el pliegue del panel: llevarla a la vista.
+  useEffect(() => {
+    if (!errorEnvio) return;
+    const id = window.setTimeout(() => {
+      cuerpo.current?.querySelector('[role="alert"]')?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }, 50);
+    return () => window.clearTimeout(id);
+  }, [errorEnvio]);
+
+  function enfocar(e: Errores, orden: Campo[]): boolean {
+    const primero = orden.find((c) => e[c]);
+    if (primero) document.getElementById(ID_CAMPO[primero])?.focus();
+    return Boolean(primero);
   }
 
-  function empezar() {
-    iniciarSonidos();
-    ir(1);
-  }
-
-  function continuarDatos() {
-    const e = validar({ nombre, anio, tutor, contacto });
+  function continuarHijo() {
+    const e = validarHijo({ nombre, anio, categoria }, pideCategoria);
     setErrores(e);
-    const primero = (Object.keys(ID_CAMPO) as Campo[]).find((c) => e[c]);
-    if (primero) {
-      sonar("aviso");
-      document.getElementById(ID_CAMPO[primero])?.focus();
-      return;
-    }
-    ir(2);
+    // Otro hijo/a: los datos del apoderado ya están; se pasa directo a las autorizaciones (con «Volver» se editan).
+    if (!enfocar(e, ["nombre", "anio", "categoria"])) setPaso(otro ? P.autorizacion : P.apoderado);
+  }
+
+  function continuarApoderado() {
+    const e = validarApoderado({ tutor, correo, telefono });
+    setErrores(e);
+    if (!enfocar(e, ["tutor", "correo", "telefono"])) setPaso(P.autorizacion);
   }
 
   async function enviar() {
@@ -193,18 +253,20 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
     try {
       const c = await enviarInscripcion({
         token,
-        nombreNino: nombre.split(/\s+/).filter(Boolean).join(" "),
+        nombreNino: limpio(nombre),
         anioNacimiento: anio,
-        categoria: fijo ? "" : categoria,
-        tutorNombre: tutor.split(/\s+/).filter(Boolean).join(" "),
-        tutorContacto: contacto.trim(),
+        categoria: fijo || categoria === NO_SE ? "" : categoria,
+        tutorNombre: limpio(tutor),
+        tutorCorreo: normalizarCorreo(correo) ?? correo.trim(),
+        tutorTelefono: normalizarTelefono(telefono) ?? telefono.trim(),
+        tutorParentesco: parentesco,
+        aceptaComunicaciones: aceptaCom,
         fotos: blobs,
       });
-      sonar("exito");
       setCodigo(c);
-      setPaso(4);
+      setEnviados((l) => [...l, limpio(nombre)]);
+      setPaso(P.listo);
     } catch (e) {
-      sonar("error");
       const err = e instanceof ErrorInscripcion ? e : new ErrorInscripcion("error", "No se pudo enviar. Intenta de nuevo.");
       setErrorEnvio(err);
       if (err.codigo === "enlace_invalido") {
@@ -214,11 +276,11 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
       const campo = err.campo ? CAMPO_SERVIDOR[err.campo] : undefined;
       if (err.codigo === "datos_invalidos" && campo) {
         setErrores({ [campo]: err.message });
-        setPaso(1);
+        setPaso(PASO_DE_CAMPO[campo]);
         window.setTimeout(() => document.getElementById(ID_CAMPO[campo])?.focus(), 350);
       } else if (err.codigo === "sin_consentimiento") {
         setAcepta(false);
-        setPaso(2);
+        setPaso(P.autorizacion);
       } else if (err.foto) {
         // El servidor numera por orden de envío: coincide con las fotos tomadas, que están contiguas.
         const lista = fotos.map((f, i) => (f ? i : -1)).filter((i) => i >= 0);
@@ -230,7 +292,23 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
     }
   }
 
+  /** Otro hijo/a: se limpian los datos del niño, las fotos y las autorizaciones; el apoderado se conserva. */
+  function otroHijo() {
+    setNombre("");
+    setAnio("");
+    setCategoria("");
+    setFotos([null, null, null]);
+    setMalas([]);
+    setAcepta(false);
+    setAceptaCom(false);
+    setErrores({});
+    setErrorEnvio(null);
+    setCodigo("");
+    setPaso(P.hijo);
+  }
+
   const nFotos = fotos.filter(Boolean).length;
+  const etapa = ETAPA_DE_PASO[paso];
   const campoErr = (c: Campo) => (errores[c] ? { "aria-invalid": true as const, "aria-describedby": `${ID_CAMPO[c]}-err` } : {});
   const msgCampo = (c: Campo) =>
     errores[c] ? (
@@ -238,19 +316,25 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
         {errores[c]}
       </p>
     ) : null;
-  const alerta = errorEnvio && (paso === 3 || paso === 1 || paso === 2) ? errorEnvio.message : null;
+  const alerta = errorEnvio && paso >= P.hijo && paso <= P.fotos ? errorEnvio.message : null;
+  const alertaBloque = alerta ? (
+    <p className="ins-alerta" role="alert">
+      {alerta}
+    </p>
+  ) : null;
 
   return (
     <MotionConfig reducedMotion="user">
       <Fondo>
         <section className="ins-panel" aria-label="Inscripción">
-          {paso < 4 && (
-            <div className="ins-progreso" role="progressbar" aria-label="Progreso" aria-valuemin={1} aria-valuemax={4} aria-valuenow={paso + 1} aria-valuetext={`Paso ${paso + 1} de 4`}>
-              {[0, 1, 2, 3].map((i) => (
-                <i key={i} data-on={i <= paso ? "" : undefined} />
-              ))}
-            </div>
-          )}
+          <ol className="ins-etapas" aria-label="Progreso de la inscripción">
+            {ETAPAS.map((t, i) => (
+              <li key={t} data-on={i <= etapa ? "" : undefined} aria-current={i === etapa ? "step" : undefined}>
+                <i aria-hidden />
+                <span>{t}</span>
+              </li>
+            ))}
+          </ol>
 
           <div className="ins-cuerpo" ref={cuerpo}>
             <AnimatePresence mode="wait" initial={false}>
@@ -261,160 +345,259 @@ function Formulario({ info, token }: { info: InfoInscripcion; token: string }) {
                 exit={{ opacity: 0, x: -22, transition: { duration: 0.16 } }}
                 transition={{ duration: 0.38, ease: EASE }}
               >
-                {paso === 0 && (
+                {paso === P.bienvenida && (
                   <>
                     <h1 className="ins-h" ref={titulo} tabIndex={-1}>
                       Inscribe a tu hijo o hija
                     </h1>
-                    <p className="ins-p">{nombreSede}</p>
+                    <p className="ins-p">
+                      {nombreSede}
+                      {info.categoria_fija ? ` · ${info.categoria_fija}` : ""}
+                    </p>
                     <ul className="ins-lista">
                       <li>
+                        <Timer size={20} aria-hidden />
+                        <span>Son unos 2 minutos: los datos del niño o niña, tus datos de contacto y 2 o 3 fotos de su cara.</span>
+                      </li>
+                      <li>
                         <ScanFace size={20} aria-hidden />
-                        <span>Registramos la asistencia en la cancha con reconocimiento facial: el niño o niña mira la cámara y listo.</span>
+                        <span>Con las fotos, la cámara de la cancha lo reconoce al llegar y la asistencia queda registrada sola.</span>
                       </li>
                       <li>
                         <Lock size={20} aria-hidden />
-                        <span>No se guarda la foto: solo un código numérico (vector) por foto. Mientras el club revisa se guarda una miniatura, que se borra al aprobar o rechazar.</span>
-                      </li>
-                      <li>
-                        <ShieldCheck size={20} aria-hidden />
-                        <span>Te tomará unos 3 minutos: datos, autorización y 2 o 3 fotos del rostro.</span>
+                        <span>No guardamos las fotos: solo un código numérico por foto. Mientras el club revisa queda una miniatura, que se borra al aprobar o rechazar.</span>
                       </li>
                     </ul>
+                    <p className="ins-ayuda mt-5">Este enlace vale hasta el {fechaCorta(info.expira)}.</p>
                   </>
                 )}
 
-                {paso === 1 && (
+                {paso === P.hijo && (
                   <>
                     <h1 className="ins-h" ref={titulo} tabIndex={-1}>
-                      Datos
+                      {otro ? "Otro hijo o hija" : "Tu hijo o hija"}
                     </h1>
+                    {otro && (
+                      <p className="ins-nota">
+                        Usaremos los mismos datos de apoderado ({limpio(tutor)} · {normalizarCorreo(correo) ?? correo} · {telefonoLegible(normalizarTelefono(telefono) ?? telefono)}). No tienes que escribirlos de nuevo.
+                      </p>
+                    )}
                     <form
-                      id="ins-datos"
+                      id="ins-hijo"
                       noValidate
                       onSubmit={(e) => {
                         e.preventDefault();
-                        continuarDatos();
+                        continuarHijo();
                       }}
                     >
                       <div className="ins-campo">
-                        <label htmlFor="ins-nombre">Nombre completo del niño o niña</label>
+                        <label htmlFor="ins-nombre">Nombre y apellido</label>
                         <input id="ins-nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} type="text" inputMode="text" autoComplete="off" autoCapitalize="words" enterKeyHint="next" maxLength={60} {...campoErr("nombre")} />
                         {msgCampo("nombre")}
                       </div>
                       <div className="ins-campo">
                         <label htmlFor="ins-anio">Año de nacimiento</label>
-                        <input id="ins-anio" value={anio} onChange={(e) => setAnio(e.target.value.replace(/\D/g, "").slice(0, 4))} type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="off" enterKeyHint="next" placeholder="Ej: 2016" {...campoErr("anio")} />
+                        <input id="ins-anio" value={anio} onChange={(e) => setAnio(e.target.value.replace(/\D/g, "").slice(0, 4))} type="text" inputMode="numeric" pattern="[0-9]*" autoComplete="off" enterKeyHint={pideCategoria ? "next" : "done"} placeholder="Ej: 2016" {...campoErr("anio")} />
                         {msgCampo("anio")}
                       </div>
-                      {!fijo && info.categorias.length > 0 && (
+                      {pideCategoria && (
                         <div className="ins-campo">
-                          <label htmlFor="ins-categoria">Categoría (opcional)</label>
-                          <select id="ins-categoria" value={categoria} onChange={(e) => setCategoria(e.target.value)} {...campoErr("categoria")}>
-                            <option value="">No estoy segura o seguro</option>
+                          <label htmlFor="ins-categoria">Categoría</label>
+                          <select id="ins-categoria" value={categoria} onChange={(e) => setCategoria(e.target.value)} {...campoErr("categoria")} aria-describedby={errores.categoria ? "ins-categoria-err" : "ins-categoria-ayuda"}>
+                            <option value="" disabled>
+                              Elige una opción
+                            </option>
                             {info.categorias.map((c) => (
                               <option key={c} value={c}>
                                 {c}
                               </option>
                             ))}
+                            <option value={NO_SE}>No estoy seguro/a</option>
                           </select>
-                          {msgCampo("categoria")}
+                          {errores.categoria ? (
+                            msgCampo("categoria")
+                          ) : (
+                            <p id="ins-categoria-ayuda" className="ins-ayuda">
+                              Si no la sabes, el staff la completa.
+                            </p>
+                          )}
                         </div>
                       )}
-                      {fijo && <p className="ins-p">Categoría: {info.categoria_fija}</p>}
-                      <div className="ins-campo">
-                        <label htmlFor="ins-tutor">Tu nombre (padre, madre o tutor)</label>
-                        <input id="ins-tutor" value={tutor} onChange={(e) => setTutor(e.target.value)} type="text" inputMode="text" autoComplete="name" autoCapitalize="words" enterKeyHint="next" maxLength={60} {...campoErr("tutor")} />
-                        {msgCampo("tutor")}
-                      </div>
-                      <div className="ins-campo">
-                        <label htmlFor="ins-contacto">Correo o teléfono de contacto</label>
-                        <input id="ins-contacto" value={contacto} onChange={(e) => setContacto(e.target.value)} type="text" inputMode="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="done" maxLength={254} {...campoErr("contacto")} />
-                        {msgCampo("contacto")}
-                      </div>
+                      {fijo && <p className="ins-ayuda mt-4">Categoría: {info.categoria_fija}</p>}
                     </form>
-                    {alerta && (
-                      <p className="ins-alerta" role="alert">
-                        {alerta}
-                      </p>
-                    )}
+                    {alertaBloque}
                   </>
                 )}
 
-                {paso === 2 && (
+                {paso === P.apoderado && (
                   <>
                     <h1 className="ins-h" ref={titulo} tabIndex={-1}>
-                      Autorización
+                      Tus datos
                     </h1>
-                    <p className="ins-p">Lee con calma antes de continuar.</p>
-                    <div className="ins-consent" tabIndex={0} role="region" aria-label="Texto de la autorización">
+                    <p className="ins-p">Para que el club pueda avisarte sobre la inscripción y la asistencia de {primerNombre}.</p>
+                    <form
+                      id="ins-apoderado"
+                      noValidate
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        continuarApoderado();
+                      }}
+                    >
+                      <div className="ins-campo">
+                        <label htmlFor="ins-tutor">Tu nombre y apellido</label>
+                        <input id="ins-tutor" value={tutor} onChange={(e) => setTutor(e.target.value)} type="text" inputMode="text" autoComplete="name" autoCapitalize="words" enterKeyHint="next" maxLength={60} {...campoErr("tutor")} />
+                        {msgCampo("tutor")}
+                      </div>
+                      <fieldset className="ins-campo">
+                        <legend>
+                          Parentesco <span className="ins-opcional">(opcional)</span>
+                        </legend>
+                        <div className="ins-seg">
+                          {PARENTESCOS.map((p) => (
+                            <label key={p.valor}>
+                              <input
+                                id={`ins-parentesco-${p.valor}`}
+                                type="radio"
+                                name="parentesco"
+                                value={p.valor}
+                                checked={parentesco === p.valor}
+                                onChange={() => setParentesco(p.valor)}
+                                onClick={() => parentesco === p.valor && setParentesco("")}
+                              />
+                              {p.texto}
+                            </label>
+                          ))}
+                        </div>
+                        {msgCampo("parentesco")}
+                      </fieldset>
+                      <div className="ins-campo">
+                        <label htmlFor="ins-correo">Correo</label>
+                        <input id="ins-correo" value={correo} onChange={(e) => setCorreo(e.target.value)} type="email" inputMode="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="next" maxLength={254} placeholder="nombre@correo.cl" {...campoErr("correo")} />
+                        {msgCampo("correo")}
+                      </div>
+                      <div className="ins-campo">
+                        <label htmlFor="ins-telefono">Celular</label>
+                        <div className="ins-tel">
+                          <span aria-hidden>+56</span>
+                          <input
+                            id="ins-telefono"
+                            value={telefono}
+                            onChange={(e) => setTelefono(e.target.value.replace(/[^\d\s+()-]/g, "").slice(0, 16))}
+                            type="tel"
+                            inputMode="tel"
+                            autoComplete="tel-national"
+                            enterKeyHint="done"
+                            placeholder="9 1234 5678"
+                            aria-label="Celular, 9 dígitos (código +56)"
+                            {...campoErr("telefono")}
+                          />
+                        </div>
+                        {msgCampo("telefono")}
+                      </div>
+                    </form>
+                    {alertaBloque}
+                  </>
+                )}
+
+                {paso === P.autorizacion && (
+                  <>
+                    <h1 className="ins-h" ref={titulo} tabIndex={-1}>
+                      Autorizaciones
+                    </h1>
+                    <h2 className="ins-sub">Reconocimiento facial</h2>
+                    <div className="ins-consent" tabIndex={0} role="region" aria-label="Texto de la autorización de reconocimiento facial">
                       {info.consentimiento.texto}
                     </div>
                     <label className="ins-check">
                       <input type="checkbox" checked={acepta} onChange={(e) => setAcepta(e.target.checked)} />
-                      <span>Soy el padre, madre o tutor legal y autorizo el tratamiento de los datos biométricos de mi hijo o hija descrito arriba.</span>
+                      <span>Soy el padre, madre o tutor legal y autorizo el tratamiento de los datos biométricos de {primerNombre} descrito arriba.</span>
                     </label>
-                    {alerta && (
-                      <p className="ins-alerta" role="alert">
-                        {alerta}
-                      </p>
+
+                    {info.comunicaciones && (
+                      <>
+                        <h2 className="ins-sub">
+                          Comunicaciones <span className="ins-opcional">(opcional)</span>
+                        </h2>
+                        <div className="ins-consent" data-corto="" tabIndex={0} role="region" aria-label="Texto de la autorización de comunicaciones">
+                          {info.comunicaciones.texto}
+                        </div>
+                        <label className="ins-check">
+                          <input type="checkbox" checked={aceptaCom} onChange={(e) => setAceptaCom(e.target.checked)} />
+                          <span>Acepto que el club me escriba al correo y al celular que indiqué. Si no la marcas, la inscripción sigue igual.</span>
+                        </label>
+                      </>
                     )}
+                    {alertaBloque}
                   </>
                 )}
 
-                {paso === 3 && <FotosPaso titulo={titulo} fotos={fotos} setFotos={setFotos} malas={malas} setMalas={setMalas} maxMb={info.fotos.max_mb} alerta={alerta} />}
+                {paso === P.fotos && <FotosPaso titulo={titulo} fotos={fotos} setFotos={setFotos} malas={malas} setMalas={setMalas} maxMb={info.fotos.max_mb} alerta={alerta} />}
 
-                {paso === 4 && (
+                {paso === P.listo && (
                   <>
                     <CheckCircle2 size={44} className="text-verde-pantalla" aria-hidden />
                     <h1 className="ins-h mt-4" ref={titulo} tabIndex={-1}>
-                      Listo, quedó pendiente de confirmación del staff
+                      Listo, recibimos la inscripción de {enviados[enviados.length - 1]?.split(" ")[0] ?? "tu hijo/a"}
                     </h1>
                     {codigo && (
                       <>
-                        <p className="ins-p">Tu código de solicitud:</p>
+                        <p className="ins-p">Código de solicitud (por si el staff te lo pide):</p>
                         <p className="ins-codigo" aria-label={`Código ${codigo.split("").join(" ")}`}>
                           {codigo}
                         </p>
                       </>
                     )}
-                    <p className="ins-p">No necesitas hacer nada más. Si el staff necesita algo, te contactará.</p>
+                    <h2 className="ins-sub">Qué pasa ahora</h2>
+                    <ol className="ins-pasos">
+                      <li>El staff de {nombreSede} revisa los datos y las fotos.</li>
+                      <li>Cuando lo apruebe, ya puede marcar su llegada mirando la cámara en la cancha.</li>
+                      <li>No necesitas hacer nada más. Si falta algo, el staff te contactará.</li>
+                    </ol>
+                    {enviados.length > 1 && <p className="ins-ayuda mt-4">Enviaste {enviados.length} inscripciones: {enviados.join(", ")}.</p>}
                   </>
                 )}
               </motion.div>
             </AnimatePresence>
           </div>
 
-          {paso < 4 && (
-            <div className="ins-pie">
-              {paso > 0 && (
-                <button type="button" className="ins-btn" data-sec="" onClick={() => ir(paso - 1)} aria-label="Volver" disabled={enviando}>
-                  <ArrowLeft size={20} aria-hidden />
-                </button>
-              )}
-              {paso === 0 && (
-                <button type="button" className="ins-btn" onClick={empezar}>
-                  Comenzar
-                </button>
-              )}
-              {paso === 1 && (
-                <button type="submit" form="ins-datos" className="ins-btn">
-                  Continuar
-                </button>
-              )}
-              {paso === 2 && (
-                <button type="button" className="ins-btn" disabled={!acepta} onClick={() => ir(3)}>
-                  Acepto y continúo
-                </button>
-              )}
-              {paso === 3 && (
-                <button type="button" className="ins-btn" disabled={nFotos < info.fotos.minimo || enviando} aria-busy={enviando} onClick={enviar}>
-                  {enviando ? <Loader2 size={20} className="s-spin" aria-hidden /> : null}
-                  {enviando ? "Enviando…" : errorEnvio?.codigo === "red" ? "Reintentar envío" : "Enviar solicitud"}
-                </button>
-              )}
-            </div>
-          )}
+          <div className="ins-pie">
+            {paso > P.bienvenida && paso < P.listo && !(otro && paso === P.hijo) && (
+              <button type="button" className="ins-btn" data-sec="" onClick={() => setPaso(paso - 1)} aria-label="Volver" disabled={enviando}>
+                <ArrowLeft size={20} aria-hidden />
+              </button>
+            )}
+            {paso === P.bienvenida && (
+              <button type="button" className="ins-btn" onClick={() => setPaso(P.hijo)}>
+                Comenzar
+              </button>
+            )}
+            {paso === P.hijo && (
+              <button type="submit" form="ins-hijo" className="ins-btn">
+                Continuar
+              </button>
+            )}
+            {paso === P.apoderado && (
+              <button type="submit" form="ins-apoderado" className="ins-btn">
+                Continuar
+              </button>
+            )}
+            {paso === P.autorizacion && (
+              <button type="button" className="ins-btn" disabled={!acepta} onClick={() => setPaso(P.fotos)}>
+                Continuar a las fotos
+              </button>
+            )}
+            {paso === P.fotos && (
+              <button type="button" className="ins-btn" disabled={nFotos < info.fotos.minimo || enviando} aria-busy={enviando} onClick={enviar}>
+                {enviando ? <Loader2 size={20} className="s-spin" aria-hidden /> : null}
+                {enviando ? "Enviando…" : errorEnvio?.codigo === "red" ? "Reintentar envío" : "Enviar inscripción"}
+              </button>
+            )}
+            {paso === P.listo && (
+              <button type="button" className="ins-btn" data-sec="" style={{ flex: 1 }} onClick={otroHijo}>
+                <UserPlus size={18} aria-hidden /> Inscribir a otro hijo/a
+              </button>
+            )}
+          </div>
         </section>
       </Fondo>
     </MotionConfig>

@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
 
+from api import seguimiento
 from api.nucleo import Sede, error, sede_staff
 from src import cv_engine, metricas
 
@@ -31,7 +32,14 @@ def _categoria(s: Sede, categoria: str | None) -> str | None:
 @router.get("/hoy")
 async def metricas_hoy(categoria: str | None = None, s: Sede = Depends(sede_staff)):
     cat = _categoria(s, categoria)
-    return await run_in_threadpool(metricas.hoy, s.db, cat)
+    datos = await run_in_threadpool(metricas.hoy, s.db, cat)
+    # Aditivo: alertas (evaluación perezosa, máx. 1/min) y avance de la revisión de la tanda ("X de Y revisados").
+    await run_in_threadpool(seguimiento.evaluar_alertas, s)
+    datos["alertas"] = await run_in_threadpool(s.db.contar_alertas)
+    rev = await run_in_threadpool(s.db.revision_hoy, seguimiento.limite_revision(s))
+    datos["revision"] = {k: rev[k] for k in ("total", "revisados", "seguros_sin_revisar")} | {
+        "por_revisar": len(rev["por_revisar"])}
+    return datos
 
 
 @router.get("/reconocimiento")

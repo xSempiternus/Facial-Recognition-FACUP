@@ -12,6 +12,7 @@ Retenciones: solicitudes 30 días, pendientes 7 días (purga automática).
 """
 
 import json
+import re
 import secrets
 from datetime import datetime, timedelta
 
@@ -36,7 +37,14 @@ _MIGRACIONES_FLUJOS = {
     # verificacion_id: fila de verificaciones_log de la captura (para saber qué decidió el staff sobre ella).
     "pendientes": {"parecido": "TEXT", "verificacion_id": "INTEGER"},
     # {modelo: [embeddings]} de modelos sombra calculados sobre los mismos recortes (p. ej. SFace).
-    "solicitudes": {"embeddings_extra": "TEXT"},
+    # tutor_correo / tutor_telefono (+569XXXXXXXX) / tutor_parentesco reemplazan al campo libre tutor_contacto
+    # (que se conserva por compatibilidad); acepta_comunicaciones: 1/0 (copia para el staff; la evidencia está
+    # en consentimientos).
+    "solicitudes": {"embeddings_extra": "TEXT", "tutor_correo": "TEXT", "tutor_telefono": "TEXT",
+                    "tutor_parentesco": "TEXT", "acepta_comunicaciones": "INTEGER"},
+    # Autorización de comunicaciones (separada y opcional): flag + versión/hash del texto y fecha de aceptación.
+    "consentimientos": {"acepta_comunicaciones": "INTEGER", "comunicaciones_version": "TEXT",
+                        "comunicaciones_texto_hash": "TEXT", "comunicaciones_fecha": "DATETIME"},
     # Modo sombra (no cambian el veredicto): ensemble SFace en zona gris, cara recortada en el celular y la
     # decisión del staff sobre esa captura (staff_id: jugador al que el staff asignó el pendiente).
     "verificaciones_log": {"score_sface": "REAL", "candidato_sface": "INTEGER", "fusion_score": "REAL",
@@ -145,6 +153,55 @@ _ESQUEMA = [
 ]
 
 
+PARENTESCOS = ("madre", "padre", "otro")
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$")
+
+
+def normalizar_correo(valor: str | None) -> str | None:
+    """Correo en minúsculas, o None si no es válido."""
+    v = (valor or "").strip()
+    return v.lower() if len(v) <= 254 and _EMAIL_RE.match(v) else None
+
+
+def normalizar_telefono_cl(valor: str | None) -> str | None:
+    """Celular chileno en formato +569XXXXXXXX. Acepta 9XXXXXXXX, 569XXXXXXXX, +56 9 XXXX XXXX, 0056...
+    None si no es un celular chileno."""
+    t = re.sub(r"[\s().-]", "", valor or "")
+    if t.startswith("00"):
+        t = t[2:]
+    t = t.lstrip("+")
+    if len(t) == 11 and t.startswith("56"):
+        t = t[2:]
+    return "+56" + t if re.fullmatch(r"9\d{8}", t) else None
+
+
+def contacto_legado(contacto: str | None) -> tuple[str | None, str | None]:
+    """(correo, telefono) a partir del campo libre antiguo tutor_contacto, si calza con alguno."""
+    c = (contacto or "").strip()
+    return (normalizar_correo(c), None) if "@" in c else (None, normalizar_telefono_cl(c))
+
+
+def _migrar_contactos_legado(conn) -> None:
+    """Una vez por BD: solicitudes (y jugadores aprobados) con el campo libre tutor_contacto -> correo/teléfono."""
+    if conn.execute("SELECT 1 FROM meta WHERE clave = 'migracion_contacto_v1'").fetchone():
+        return
+    for sid, contacto in conn.execute("SELECT id, tutor_contacto FROM solicitudes "
+                                      "WHERE tutor_correo IS NULL AND tutor_telefono IS NULL").fetchall():
+        correo, tel = contacto_legado(contacto)
+        if correo or tel:
+            conn.execute("UPDATE solicitudes SET tutor_correo = ?, tutor_telefono = ? WHERE id = ?", (correo, tel, sid))
+    cols_j = {r[1] for r in conn.execute("PRAGMA table_info(jugadores)")}
+    if {"tutor_correo", "tutor_telefono"} <= cols_j:
+        filas = conn.execute(
+            "SELECT j.id, (SELECT c.contacto FROM consentimientos c WHERE c.jugador_id = j.id ORDER BY c.id DESC "
+            "LIMIT 1) FROM jugadores j WHERE j.tutor_correo IS NULL AND j.tutor_telefono IS NULL").fetchall()
+        for jid, contacto in filas:
+            correo, tel = contacto_legado(contacto)
+            if correo or tel:
+                conn.execute("UPDATE jugadores SET tutor_correo = ?, tutor_telefono = ? WHERE id = ?", (correo, tel, jid))
+    conn.execute("INSERT INTO meta (clave, valor) VALUES ('migracion_contacto_v1', ?)", (_now(),))
+
+
 def _now() -> str:
     return datetime.now().isoformat(sep=" ", timespec="seconds")
 
@@ -164,6 +221,7 @@ def crear_esquema(conn) -> None:
                 conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {col} {tipo}")
     if conn.execute("SELECT 1 FROM meta WHERE clave = 'ip_sal'").fetchone() is None:
         conn.execute("INSERT INTO meta (clave, valor) VALUES ('ip_sal', ?)", (secrets.token_hex(16),))
+    _migrar_contactos_legado(conn)
 
 
 def _codigo() -> str:
@@ -239,8 +297,11 @@ class FlujosDB:
 
     # ------------------------------------------------------------ solicitudes
 
-    def contar_solicitudes(self) -> int:
+    def contar_solicitudes(self, enlace_id: int | None = None) -> int:
+        """Solicitudes pendientes (todas, o solo las llegadas por un enlace)."""
         with self.conexion() as conn:
+            if enlace_id is not None:
+                return conn.execute("SELECT COUNT(*) FROM solicitudes WHERE enlace_id = ?", (enlace_id,)).fetchone()[0]
             return conn.execute("SELECT COUNT(*) FROM solicitudes").fetchone()[0]
 
     def embeddings_solicitudes(self, modelo: str) -> dict[int, list]:
@@ -260,20 +321,26 @@ class FlujosDB:
                 """
                 INSERT INTO solicitudes (codigo, enlace_id, nombre_nino, anio_nacimiento, categoria, tutor_nombre,
                     tutor_contacto, embeddings, modelo, miniatura, duplicado_de_id, duplicado_similitud,
-                    duplicado_solicitud_id, duplicado_solicitud_similitud, creado_en, embeddings_extra)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    duplicado_solicitud_id, duplicado_solicitud_similitud, creado_en, embeddings_extra,
+                    tutor_correo, tutor_telefono, tutor_parentesco, acepta_comunicaciones)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (codigo, d["enlace_id"], d["nombre_nino"], d["anio_nacimiento"], d["categoria"], d["tutor_nombre"],
                  d["tutor_contacto"], json.dumps(d["embeddings"]), d["modelo"], d["miniatura"],
                  d.get("duplicado_de_id"), d.get("duplicado_similitud"),
                  d.get("duplicado_solicitud_id"), d.get("duplicado_solicitud_similitud"), _now(),
-                 json.dumps(d["embeddings_extra"]) if d.get("embeddings_extra") else None))
+                 json.dumps(d["embeddings_extra"]) if d.get("embeddings_extra") else None,
+                 d.get("tutor_correo"), d.get("tutor_telefono"), d.get("tutor_parentesco"),
+                 1 if d.get("acepta_comunicaciones") else 0))
             sid = cur.lastrowid
+            com = consentimiento.get("comunicaciones")  # {version, texto_hash} solo si aceptó
             conn.execute(
-                "INSERT INTO consentimientos (solicitud_id, version_texto, texto_hash, tutor, contacto, fecha, ip_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO consentimientos (solicitud_id, version_texto, texto_hash, tutor, contacto, fecha, ip_hash, "
+                "acepta_comunicaciones, comunicaciones_version, comunicaciones_texto_hash, comunicaciones_fecha) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (sid, consentimiento["version"], consentimiento["texto_hash"], d["tutor_nombre"],
-                 d["tutor_contacto"], _now(), consentimiento.get("ip_hash")))
+                 d["tutor_contacto"], _now(), consentimiento.get("ip_hash"), 1 if com else 0,
+                 com["version"] if com else None, com["texto_hash"] if com else None, _now() if com else None))
             return sid, codigo
 
     def listar_solicitudes(self) -> list[dict]:
@@ -282,7 +349,8 @@ class FlujosDB:
             rows = conn.execute(
                 "SELECT id, codigo, enlace_id, nombre_nino, anio_nacimiento, categoria, tutor_nombre, tutor_contacto, "
                 "embeddings, modelo, miniatura, duplicado_de_id, duplicado_similitud, duplicado_solicitud_id, "
-                "duplicado_solicitud_similitud, creado_en FROM solicitudes ORDER BY id").fetchall()
+                "duplicado_solicitud_similitud, creado_en, tutor_correo, tutor_telefono, tutor_parentesco, "
+                "acepta_comunicaciones FROM solicitudes ORDER BY id").fetchall()
         salida = []
         for r in rows:
             d = dict(r)
@@ -329,22 +397,30 @@ class FlujosDB:
         de la solicitud, enlaza el consentimiento y borra la solicitud. Todo en una transacción.
         LookupError si la solicitud ya no existe o el invitado no existe / no es invitado."""
         embs, modelo, ahora = sol["embeddings"], sol["modelo"], _now()
+        # Solicitudes viejas (solo tutor_contacto) que la migración no alcanzó: se intenta de nuevo aquí.
+        correo, tel = sol.get("tutor_correo"), sol.get("tutor_telefono")
+        if not correo and not tel:
+            correo, tel = contacto_legado(sol.get("tutor_contacto"))
+        apoderado = (correo, tel, sol.get("tutor_parentesco"), sol.get("anio_nacimiento"))
         with self.conexion() as conn:
             if conn.execute("SELECT 1 FROM solicitudes WHERE id = ?", (sol["id"],)).fetchone() is None:
                 raise LookupError("solicitud")
             if invitado_id is not None:
                 cur = conn.execute(
                     "UPDATE jugadores SET nombre = ?, categoria = ?, estado = 'activo', embedding = ?, modelo = ?, "
-                    "consentimiento_tutor = ?, consentimiento_fecha = ? WHERE id = ? AND estado = 'invitado'",
-                    (nombre, categoria, json.dumps(embs[0]), modelo, sol["tutor_nombre"], ahora, invitado_id))
+                    "consentimiento_tutor = ?, consentimiento_fecha = ?, tutor_correo = ?, tutor_telefono = ?, "
+                    "tutor_parentesco = ?, anio_nacimiento = ? WHERE id = ? AND estado = 'invitado'",
+                    (nombre, categoria, json.dumps(embs[0]), modelo, sol["tutor_nombre"], ahora, *apoderado,
+                     invitado_id))
                 if cur.rowcount == 0:
                     raise LookupError("invitado")
                 jid = invitado_id
             else:
                 cur = conn.execute(
                     "INSERT INTO jugadores (nombre, embedding, categoria, creado_en, modelo, consentimiento_tutor, "
-                    "consentimiento_fecha, estado) VALUES (?, ?, ?, ?, ?, ?, ?, 'activo')",
-                    (nombre, json.dumps(embs[0]), categoria, ahora, modelo, sol["tutor_nombre"], ahora))
+                    "consentimiento_fecha, estado, tutor_correo, tutor_telefono, tutor_parentesco, anio_nacimiento) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'activo', ?, ?, ?, ?)",
+                    (nombre, json.dumps(embs[0]), categoria, ahora, modelo, sol["tutor_nombre"], ahora, *apoderado))
                 jid = cur.lastrowid
             conn.executemany(
                 "INSERT INTO fotos (jugador_id, embedding, modelo, origen, creado_en) VALUES (?, ?, ?, 'inscripcion', ?)",

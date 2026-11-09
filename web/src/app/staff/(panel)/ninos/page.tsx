@@ -9,7 +9,9 @@ import { BotonAyuda, Tour, type PasoTour } from "@/components/staff/Tour";
 import { Avatar, Badge, BadgeInvitado, Button, ErrorCarga, PageHeader, SkeletonRows, Vacio, useQuery, useRefrescoAlVolver } from "@/components/staff/ui";
 import { api, ordenarCategorias, publicarPendientes, sinTildes, type Jugador } from "@/lib/staff-api";
 import { estadoNino } from "@/lib/staff-api-ninos";
+import { ParaContactar } from "@/components/staff/ParaContactar";
 import "../../ninos.css";
+import "../../revisar.css";
 import { ContenidoApoderado } from "./Apoderado";
 import { FichaNino } from "./FichaNino";
 import { Hoja } from "./Hoja";
@@ -139,6 +141,8 @@ export default function Ninos() {
         )}
       </div>
 
+      {pestana === "inscritos" && <ParaContactar id="nn-contactar" />}
+
       {pestana === "inscritos" ? (
         <section className="s-card" aria-label="Niños inscritos">
           {q.cargando && !data ? (
@@ -217,7 +221,7 @@ function Fila({ j, onAbrir }: { j: Jugador; onAbrir: () => void }) {
         <Avatar nombre={j.nombre} />
         <span className="nn-fila-n">
           <b>{j.nombre}</b>
-          <small>{j.categoria ?? "Sin categoría"}</small>
+          <small>{j.categoria ?? <span className="nn-completar">Sin categoría · completar</span>}</small>
         </span>
         {e.tono === "inv" ? <BadgeInvitado /> : <Badge tono={e.tono}>{e.texto}</Badge>}
         <ChevronRight size={18} aria-hidden />

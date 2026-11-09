@@ -42,6 +42,7 @@ PERSONA_B = ["img3.jpg", "img12.jpg", "img53.jpg", "img55.jpg", "img56.jpg"]  # 
 PERSONA_C = ["img8.jpg", "img9.jpg", "img49.jpg", "img50.jpg"]
 GRUPO = "couple.jpg"
 PIN_A, PIN_B, PIN_M, PIN_U = "11112222", "33334444", "55556666", "77778888"
+PIN_I = "24681357"  # sede-i: pruebas del formulario de inscripción (límites por IP propios)
 # Config de reconocimiento en formato antiguo (sin umbral_duda) si no existe data/config.json.
 CONFIG_LEGADO = {"modelo": "GhostFaceNet", "detector": "retinaface", "umbral": 0.37, "antispoofing": False}
 LIMITES = {"RL_INSCRIPCION_IP": "16/3600", "RL_INSCRIPCION_TOKEN": "12/3600", "RL_INFO_IP": "200/600",
@@ -345,6 +346,8 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     st, v = verify("sede-a", "img10.jpg")
     check(st == 200 and v["nombre"] == "Ana" and v["ya_registrado"] is False and v.get("reporte"),
           "/verify reconoce a la niña aprobada y entrega reporte", (st, v))
+    check(isinstance(v.get("revisar"), bool) and "similitud" not in v,
+          "/verify entrega `revisar` booleano (sin puntaje)", v)
     st, res = c.req("GET", "/kiosko/resumen", sede="sede-a")
     check(res["llegadas_hoy"] == 1, "kiosko cuenta 1 llegada", res)
     st, nsy = c.req("POST", "/verify/no-soy-yo", sede="sede-a", data={"reporte": v["reporte"]})
@@ -633,6 +636,7 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
 
     pruebas_metricas(c, srv, tb)
     pruebas_umbrales(c, srv, F, ta, tb)
+    pruebas_inscripcion(c, srv, F)
 
 
 def pruebas_umbrales(c: Cliente, srv: Servidor, F: dict[str, bytes], ta: str, tb: str):
@@ -1109,6 +1113,316 @@ def pruebas_metricas(c: Cliente, srv: Servidor, tb: str):
               "rendimiento: 300 niños x 60 jornadas devuelve todo", (len(rp["ninos"]), len(rp["jornadas"])))
         check(dt < 300, f"rendimiento: resumen en {dt:.0f} ms (< 300 ms)", dt)
 
+    pruebas_alertas_revision(c, srv, tm, ids, f, hoy)
+    pruebas_exportes(c, srv, tm, f, hoy)
+
+
+def pruebas_alertas_revision(c: Cliente, srv: Servidor, tm: str, ids: dict, f, hoy):
+    """Alertas de faltas seguidas (tabla `alertas`) y revisión de asistencias faciales, sobre la sede-m sembrada en
+    pruebas_metricas (solo agrega asistencias de HOY para no cambiar las columnas de los exportes)."""
+    print("\n== Alertas: 3 faltas seguidas (sede-m)")
+    db_m = srv.data_dir / "sedes" / "sede-m" / "asistencia.db"
+    st, al = c.req("GET", "/alertas", token=tm)
+    lista = al.get("alertas", []) if isinstance(al, dict) else []
+    # Sub-10: jornadas d1, d2, d3 + d0 marcada -> Beto (última válida d1) = 3. Sub-12: d3 no fue jornada de su
+    # categoría (C anulada, D disputada) -> Cami/Dani = 1 (solo d0). Ana y Nico llegaron hoy.
+    check(st == 200 and al["umbral"] == 3 and [(a["nombre"], a["valor"], a["estado"]) for a in lista]
+          == [("Beto B", 3, "nueva")], "alerta creada solo para Beto (faltas por jornadas de su categoría)", al)
+    check(st == 200 and lista and set(lista[0]) >= {"id", "jugador_id", "nombre", "categoria", "tipo", "valor",
+                                                    "estado", "nota", "creada_en", "ultima_asistencia", "contacto"}
+          and lista[0]["tipo"] == "faltas_seguidas" and lista[0]["ultima_asistencia"] == f(hoy - timedelta(days=9)),
+          "alerta con nombre, categoría, faltas, última asistencia y contacto", lista[:1])
+    c.req("GET", "/alertas", token=tm)
+    c.req("GET", "/metricas/hoy", token=tm)
+    with sqlite3.connect(db_m) as conn:
+        n = conn.execute("SELECT COUNT(*) FROM alertas WHERE jugador_id = ?", (ids["B"],)).fetchone()[0]
+    check(n == 1, "evaluar varias veces es idempotente (una sola alerta)", n)
+    st, h = c.req("GET", "/metricas/hoy", token=tm)
+    check(st == 200 and h.get("alertas") == {"abiertas": 1, "por_contactar": 1}, "/metricas/hoy trae el conteo de alertas",
+          h.get("alertas"))
+    st, rs = c.req("GET", "/alertas/resumen", token=tm)
+    check(st == 200 and rs == {"abiertas": 1, "por_contactar": 1}, "/alertas/resumen", rs)
+
+    aid = lista[0]["id"] if lista else 0
+    st, p = c.req("PATCH", f"/alertas/{aid}", token=tm, data={"estado": "contactada", "nota": "  Llamé a la mamá  "})
+    check(st == 200 and p["estado"] == "contactada" and p["nota"] == "Llamé a la mamá" and p["actualizada_por"] == "staff"
+          and p["actualizada_en"], "PATCH estado y nota", (st, p))
+    st, rs = c.req("GET", "/alertas/resumen", token=tm)
+    check(rs == {"abiertas": 1, "por_contactar": 0}, "contactada sigue abierta pero ya no 'por contactar'", rs)
+    st1, b1 = c.req("PATCH", f"/alertas/{aid}", token=tm, data={"estado": "borrada"})
+    st2, _ = c.req("PATCH", "/alertas/999999", token=tm, data={"estado": "vista"})
+    st3, _ = c.req("PATCH", f"/alertas/{aid}", token=tm)
+    st4, _ = c.req("PATCH", f"/alertas/{aid}", data={"estado": "vista"})
+    check((st1, codigo(b1), st2, st3, st4) == (400, "estado_invalido", 404, 400, 401),
+          "PATCH: estado inválido 400, inexistente 404, sin cambios 400, sin sesión 401", (st1, b1, st2, st3, st4))
+    with sqlite3.connect(db_m) as conn:  # (Beto se sembró por SQL: la API no lo tiene en caché para /asistencia/manual)
+        conn.execute("INSERT INTO asistencia (jugador_id, timestamp, origen) VALUES (?, ?, 'manual')",
+                     (ids["B"], datetime.now().isoformat(sep=" ", timespec="seconds")))
+    st, al2 = c.req("GET", "/alertas", token=tm)  # evalúa: asistió después de crearse -> se cierra
+    with sqlite3.connect(db_m) as conn:
+        cerr = conn.execute("SELECT estado, motivo_cierre, nota FROM alertas WHERE id = ?", (aid,)).fetchone()
+    check(cerr == ("cerrada", "asistio", "Llamé a la mamá") and al2["alertas"] == [],
+          "al asistir la alerta se cierra sola (conserva la nota)", (cerr, al2))
+    st, alc = c.req("GET", "/alertas", token=tm, params={"cerradas": "true"})
+    check(st == 200 and [a["id"] for a in alc["alertas"]] == [aid], "cerradas=true lista también las cerradas", alc)
+
+    print("\n== Alertas: lógica directa (umbral, cierre del staff, anulación, idempotencia)")
+    sys.path.insert(0, str(ROOT))
+    from src.db_manager import Base as _B
+    import tempfile as _t
+    with _t.TemporaryDirectory() as td:
+        b = _B(Path(td) / "asistencia.db")
+        b.init_db()
+        alta = f"{f(hoy - timedelta(days=60))} 09:00:00"
+        with b.conexion() as conn:
+            j = {k: conn.execute("INSERT INTO jugadores (nombre, embedding, categoria, creado_en, estado) "
+                                 "VALUES (?, '[]', ?, ?, ?)", (k, cat, alta, est)).lastrowid
+                 for k, cat, est in (("Falta", "Sub-8", "activo"), ("Va", "Sub-8", "activo"),
+                                     ("Otra cat", "Sub-14", "activo"), ("Inv", "Sub-8", "invitado"))}
+            for d in (6, 5, 4, 3, 2):  # Sub-8 entrena 5 días; "Falta" solo fue el primero
+                conn.execute("INSERT INTO asistencia (jugador_id, timestamp, origen) VALUES (?, ?, 'facial')",
+                             (j["Va"], f"{f(hoy - timedelta(days=d))} 16:00:00"))
+            conn.execute("INSERT INTO asistencia (jugador_id, timestamp, origen) VALUES (?, ?, 'facial')",
+                         (j["Falta"], f"{f(hoy - timedelta(days=6))} 16:00:00"))
+            conn.execute("INSERT INTO asistencia (jugador_id, timestamp, origen) VALUES (?, ?, 'facial')",
+                         (j["Otra cat"], f"{f(hoy - timedelta(days=20))} 16:00:00"))
+        r1 = b.evaluar_alertas(5)
+        r2 = b.evaluar_alertas(4)
+        nombres = lambda: [(a["nombre"], a["valor"]) for a in b.listar_alertas()]  # noqa: E731
+        check(r1["creadas"] == 0 and r2["creadas"] == 1 and nombres() == [("Falta", 4)],
+              "umbral configurable: 4 faltas no alertan con umbral 5 y sí con 4; otra categoría sin jornadas = 0 faltas",
+              (r1, r2, nombres()))
+        check(b.evaluar_alertas(4)["creadas"] == 0 and len(b.listar_alertas()) == 1, "re-evaluar no duplica")
+        a = b.listar_alertas()[0]
+        b.actualizar_alerta(a["id"], "cerrada", "no contesta")
+        check(b.evaluar_alertas(4)["creadas"] == 0 and b.listar_alertas() == [],
+              "cerrada por el staff: no se recrea en la misma racha")
+        aid2 = b.registrar_asistencia(j["Falta"], origen="manual")
+        b.anular_asistencia(aid2, "error")
+        b.evaluar_alertas(4)
+        check(b.listar_alertas() == [], "cerrada por el staff sigue cerrada aunque se anule una asistencia posterior")
+        with b.conexion() as conn:  # racha nueva tras asistir: otra alerta
+            conn.execute("UPDATE alertas SET creada_en = '2000-01-01 00:00:00'")
+        b.evaluar_alertas(4)
+        check(nombres() == [("Falta", 4)], "racha nueva (alerta anterior a su última asistencia) -> alerta nueva", nombres())
+        aid3 = b.registrar_asistencia(j["Falta"], origen="facial", similitud=0.9)
+        check(b.listar_alertas() == [], "registrar asistencia cierra la alerta al instante")
+        b.anular_asistencia(aid3, "no era")
+        b.evaluar_alertas(4)
+        check(nombres() == [("Falta", 4)], "si se anula la asistencia que la cerró, la alerta se reabre", nombres())
+
+    print("\n== Revisión de la tanda (sede-m)")
+    st, cfg = c.req("GET", "/config", token=tm)
+    lim = round(cfg["umbral"] + 0.05, 4)
+    with sqlite3.connect(db_m) as conn:
+        rid = {}
+        for k, nombre, sim in (("R", "Rita R", cfg["umbral"] + 0.01), ("S", "Sol S", cfg["umbral"] + 0.2),
+                               ("T", "Teo T", cfg["umbral"] + 0.02)):
+            jid = conn.execute("INSERT INTO jugadores (nombre, embedding, categoria, creado_en, modelo, estado) "
+                               "VALUES (?, '[]', 'Sub-10', ?, NULL, 'activo')",  # Sub-12 exacto en exportes
+                               (nombre, f"{f(hoy - timedelta(days=40))} 10:00:00")).lastrowid
+            rid[k] = conn.execute("INSERT INTO asistencia (jugador_id, timestamp, origen, similitud) VALUES "
+                                  "(?, ?, 'facial', ?)", (jid, f"{f(hoy)} 16:3{len(rid)}:00", round(sim, 4))).lastrowid
+    st, rv = c.req("GET", "/revision/hoy", token=tm)
+    # Faciales válidas de hoy: Ana (sin similitud: legado = seguro), Rita y Teo (bajas), Sol (alta).
+    check(st == 200 and rv["limite"] == lim and rv["total"] == 4 and rv["revisados"] == 0
+          and rv["seguros_sin_revisar"] == 2 and [x["nombre"] for x in rv["por_revisar"]] == ["Rita R", "Teo T"],
+          "revision/hoy: total, seguros y por revisar (similitud < automático + 0.05)", rv)
+    st, cs = c.req("POST", "/revision/confirmar-seguros", token=tm)
+    st2, rv2 = c.req("GET", "/revision/hoy", token=tm)
+    check(st == 200 and cs["confirmadas"] == 2 and rv2["revisados"] == 2 and rv2["seguros_sin_revisar"] == 0
+          and len(rv2["por_revisar"]) == 2, "confirmar todos los seguros (no toca los dudosos)", (cs, rv2))
+    st, ok = c.req("POST", f"/revision/{rid['R']}", token=tm, data={"accion": "confirmar"})
+    st2, no = c.req("POST", f"/revision/{rid['T']}", token=tm, data={"accion": "no_es"})
+    with sqlite3.connect(db_m) as conn:
+        fil = {r[0]: r[1:] for r in conn.execute(
+            "SELECT id, estado, revisado_por_staff, revisado_en IS NOT NULL FROM asistencia WHERE id IN (?, ?, ?)",
+            (rid["R"], rid["T"], rid["S"]))}
+    check(st == st2 == 200 and fil[rid["R"]] == ("valida", "confirmado", 1) and fil[rid["T"]] == ("anulada", "no_es", 1)
+          and fil[rid["S"]] == ("valida", "confirmado_lote", 1), "confirmar / no es él (anula) guardan la revisión", fil)
+    st, h = c.req("GET", "/metricas/hoy", token=tm)
+    check(st == 200 and h["revision"] == {"total": 4, "revisados": 4, "seguros_sin_revisar": 0, "por_revisar": 0},
+          "métrica 'X de Y revisados' en /metricas/hoy", h.get("revision"))
+    st1, b1 = c.req("POST", f"/revision/{rid['T']}", token=tm, data={"accion": "confirmar"})
+    st2, b2 = c.req("POST", f"/revision/{rid['R']}", token=tm, data={"accion": "otra"})
+    st3, _ = c.req("POST", "/revision/999999", token=tm, data={"accion": "confirmar"})
+    st4, _ = c.req("GET", "/revision/hoy")
+    check((st1, codigo(b1), st2, st3, st4) == (409, "no_valida", 400, 404, 401),
+          "revisión: anulada 409, acción inválida 400, inexistente 404, sin sesión 401", (st1, b1, st2, st3, st4))
+
+
+def pruebas_exportes(c: Cliente, srv: Servidor, tm: str, f, hoy):
+    """/exportes/asistencia.xlsx|pdf sobre los datos sembrados en la sede-m (corre al final: añade un niño con nombre-fórmula)."""
+    import io
+    from openpyxl import load_workbook
+    print("\n== Exportes (Excel y PDF)")
+    d1 = hoy - timedelta(days=9)
+    evil = '=HYPERLINK("http://x.test","clic")'
+    with sqlite3.connect(srv.data_dir / "sedes" / "sede-m" / "asistencia.db") as conn:
+        jid = conn.execute("INSERT INTO jugadores (nombre, embedding, categoria, creado_en, modelo, estado) "
+                           "VALUES (?, '[]', 'Sub-10', ?, NULL, 'activo')", (evil, f"{f(d1 - timedelta(days=30))} 10:00:00")).lastrowid
+        conn.execute("INSERT INTO asistencia (jugador_id, timestamp, origen, estado) VALUES (?, ?, 'facial', 'valida')",
+                     (jid, f"{f(d1)} 16:30:00"))
+    q = {"desde": f(d1), "hasta": f(hoy)}
+    url = lambda ext: f"{c.base}/exportes/asistencia.{ext}"  # noqa: E731
+    hdr = {"Authorization": f"Bearer {tm}"}
+    check(requests.get(url("xlsx"), params=q, timeout=60).status_code == 401
+          and requests.get(url("pdf"), params=q, timeout=60).status_code == 401, "exportes: sin token -> 401")
+    rx = requests.get(url("xlsx"), params=q, headers=hdr, timeout=60)
+    nombre = f"asistencia-sede-m-{f(d1)}_{f(hoy)}.xlsx"
+    check(rx.status_code == 200 and nombre in rx.headers.get("Content-Disposition", ""),
+          "exportes: xlsx 200 con Content-Disposition", rx.headers.get("Content-Disposition"))
+    wb = load_workbook(io.BytesIO(rx.content))
+    check(wb.sheetnames[:2] == ["Asistencia", "Resumen"], "exportes: xlsx tiene hojas Asistencia y Resumen", wb.sheetnames)
+    ws = wb["Asistencia"]
+    filas = {r[0]: r for r in ws.iter_rows(min_row=5, values_only=True) if r[0]}
+    check({"Ana A", "Beto B", "Cami C", "Dani D", "Nico N"} <= set(filas) and "Gus G" not in filas,
+          "exportes: xlsx una fila por niño inscrito (sin invitados)", list(filas))
+    ana = filas["Ana A"]
+    check(ana[1] == "Sub-10" and ana[2] == 4 and ana[3] == 5 and ana[4] == 0.8 and ana[5] == 0 and ana[6:] == ("✓", "✓", "✓", "✗", "✓"),
+          "exportes: xlsx incluye hoy y marca asistencias", ana)
+    check(ws.freeze_panes == "B5" and ws.auto_filter.ref and ws.conditional_formatting, "exportes: xlsx encabezado fijo, filtros y formato condicional")
+    check(f"'{evil}" in filas and not any(isinstance(x[0], str) and x[0].startswith("=") for x in filas.values()),
+          "exportes: nombre con fórmula escapado", [k for k in filas if "HYPER" in k])
+    check(not any(isinstance(cel.value, str) and cel.value.startswith("=") for hoja in wb for fila in hoja.iter_rows() for cel in fila),
+          "exportes: ninguna celda del libro es fórmula")
+    rc = requests.get(url("xlsx"), params={**q, "categoria": "sub-12"}, headers=hdr, timeout=60)
+    ws12 = load_workbook(io.BytesIO(rc.content))["Asistencia"]
+    check({r[0] for r in ws12.iter_rows(min_row=5, values_only=True) if r[0]} == {"Cami C", "Dani D"},
+          "exportes: filtro por categoría")
+    rp = requests.get(url("pdf"), params=q, headers=hdr, timeout=60)
+    paginas = rp.content.count(b"/Type /Page") - rp.content.count(b"/Type /Pages")
+    check(rp.status_code == 200 and rp.content[:4] == b"%PDF" and paginas > 0
+          and f"asistencia-sede-m-{f(d1)}_{f(hoy)}.pdf" in rp.headers.get("Content-Disposition", ""),
+          "exportes: pdf válido con páginas y nombre de archivo", (rp.status_code, paginas))
+    check(requests.get(url("pdf"), params={"desde": "ayer"}, headers=hdr, timeout=60).status_code == 400
+          and requests.get(url("xlsx"), params={"categoria": "Nope"}, headers=hdr, timeout=60).status_code == 404,
+          "exportes: fecha o categoría inválidas -> 400/404")
+    st, aud = c.req("GET", "/auditoria", token=tm)
+    check(st == 200 and any(a["accion"] == "exportar_asistencia" for a in aud), "exportes: queda en auditoría")
+
+
+def pruebas_inscripcion(c: Cliente, srv: Servidor, F: dict[str, bytes]):
+    """Datos del apoderado (correo + celular chileno + parentesco), autorización de comunicaciones separada,
+    enlace sin categoría (pendiente hasta aprobar), enlace multiuso con tope y compatibilidad con tutor_contacto.
+    Usa su propia sede (sede-i) para no compartir los límites por IP/token con el resto del script."""
+    print("\n== Inscripción: apoderado, comunicaciones, categoría pendiente, enlace multiuso (sede-i)")
+    st, b = c.req("POST", "/auth/login", data={"pin": PIN_I, "sede": "sede-i"})
+    if not check(st == 200, "login sede-i", (st, b)):
+        return
+    ti = b["token"]
+    db_i = srv.data_dir / "sedes" / "sede-i" / "asistencia.db"
+    anio = str(datetime.now().year - 9)
+
+    def fotos(*nombres):
+        return {f"foto{i + 1}": (n, F[n], "image/jpeg") for i, n in enumerate(nombres)}
+
+    def post(token, nombre, nombres_fotos=(), **extra):
+        datos = {"t": token, "nombre_nino": nombre, "anio_nacimiento": anio, "categoria": "",
+                 "tutor_nombre": "Carla Rojas", "tutor_correo": "carla@example.cl", "tutor_telefono": "9 8765 4321",
+                 "tutor_parentesco": "madre", "consentimiento": "true", **extra}
+        return c.req("POST", "/inscripcion", sede="sede-i", data=datos, files=fotos(*nombres_fotos) or None)
+
+    st, en = c.req("POST", "/inscripcion/enlaces", token=ti, data={"categoria": "", "dias": "7"})
+    check(st == 200 and en["categoria"] is None, "enlace SIN categoría (la elige el apoderado)", (st, en))
+    tok = en["token"]
+    st, info = c.req("GET", "/inscripcion/info", sede="sede-i", params={"t": tok})
+    check(st == 200 and info["categoria_fija"] is None and "Sub-10" in info["categorias"]
+          and "borrador" in info["comunicaciones"]["version"] and "WhatsApp" in info["comunicaciones"]["texto"]
+          and info["comunicaciones"]["texto"] != info["consentimiento"]["texto"]
+          and info["parentescos"] == ["madre", "padre", "otro"],
+          "info: selector de categorías + texto de comunicaciones separado (borrador)", info)
+
+    # Validaciones (fallan antes de mirar las fotos).
+    casos = [({"tutor_correo": "carla@"}, "tutor_correo", "correo inválido"),
+             ({"tutor_correo": ""}, "tutor_correo", "correo obligatorio"),
+             ({"tutor_telefono": "12345678"}, "tutor_telefono", "teléfono sin el 9 inicial"),
+             ({"tutor_telefono": "+54 9 11 1234 5678"}, "tutor_telefono", "teléfono no chileno"),
+             ({"tutor_telefono": ""}, "tutor_telefono", "teléfono obligatorio"),
+             ({"tutor_parentesco": "vecino"}, "tutor_parentesco", "parentesco fuera de la lista"),
+             ({"categoria": "Sub-99"}, "categoria", "categoría que no existe en la sede")]
+    for extra, campo, nombre in casos:
+        st, b = post(tok, "Nico Uno", **extra)
+        det = b.get("detail", {}) if isinstance(b, dict) else {}
+        check(st == 400 and codigo(b) == "datos_invalidos" and det.get("campo") == campo, f"{nombre} -> 400 ({campo})",
+              (st, b))
+
+    # Un apoderado, dos hijos, mismo enlace (multiuso): el primero sin categoría y aceptando comunicaciones.
+    st, s1 = post(tok, "Nico Uno", PERSONA_A[:2], tutor_correo=" Carla@Example.CL ", tutor_telefono="+56 9 8765 4321",
+                  acepta_comunicaciones="true")
+    st2, s2 = post(tok, "Sofi Uno", PERSONA_C[:2], tutor_telefono="56987654321", categoria="sub-10")
+    check(st == 200 and st2 == 200, "mismo enlace, dos hijos del mismo apoderado", (st, s1, st2, s2))
+    st, sols = c.req("GET", "/solicitudes", token=ti)
+    n1 = next((x for x in sols if x["nombre_nino"] == "Nico Uno"), {})
+    n2 = next((x for x in sols if x["nombre_nino"] == "Sofi Uno"), {})
+    check(n1.get("tutor_correo") == "carla@example.cl" and n1.get("tutor_telefono") == "+56987654321"
+          and n2.get("tutor_telefono") == "+56987654321" and n1.get("tutor_parentesco") == "madre",
+          "correo en minúsculas y celular normalizado a +569XXXXXXXX", (n1, n2))
+    check(n1.get("categoria") is None and n2.get("categoria") == "Sub-10",
+          "categoría pendiente ('No estoy seguro/a') y categoría canónica", (n1.get("categoria"), n2.get("categoria")))
+    check(n1.get("acepta_comunicaciones") is True and n2.get("acepta_comunicaciones") is False,
+          "comunicaciones: solo un sí explícito cuenta (sin premarcar)", (n1, n2))
+    st, lista = c.req("GET", "/inscripcion/enlaces", token=ti)
+    check(next((e["solicitudes_pendientes"] for e in lista if e["id"] == en["id"]), 0) == 2,
+          "el enlace multiuso cuenta sus 2 solicitudes", lista)
+    with sqlite3.connect(db_i) as conn:
+        cons = {r[0]: r[1:] for r in conn.execute(
+            "SELECT solicitud_id, acepta_comunicaciones, comunicaciones_version, comunicaciones_texto_hash, "
+            "comunicaciones_fecha, texto_hash FROM consentimientos")}
+    c1, c2 = cons.get(n1.get("id")), cons.get(n2.get("id"))
+    check(c1 and c1[0] == 1 and c1[1] and c1[2] and c1[3] and c1[2] != c1[4],
+          "evidencia: acepta_comunicaciones + versión, hash y fecha propios", c1)
+    check(c2 and c2[0] == 0 and c2[1] is None and c2[3] is None, "evidencia: quien no aceptó queda en 0 y sin fecha", c2)
+
+    # Aprobar sin categoría no falla: queda sin categoría y con los datos del apoderado en jugadores.
+    st, ap1 = c.req("POST", f"/solicitudes/{n1.get('id')}/aprobar", token=ti, data={})
+    st2, ap2 = c.req("POST", f"/solicitudes/{n2.get('id')}/aprobar", token=ti, data={})
+    check(st == 200 and ap1["categoria"] is None and st2 == 200 and ap2["categoria"] == "Sub-10",
+          "aprobar sin categoría -> jugador 'Sin categoría'", (st, ap1, st2, ap2))
+    with sqlite3.connect(db_i) as conn:
+        j1 = conn.execute("SELECT tutor_correo, tutor_telefono, tutor_parentesco, anio_nacimiento, categoria "
+                          "FROM jugadores WHERE id = ?", (ap1.get("id"),)).fetchone()
+        com = conn.execute("SELECT acepta_comunicaciones FROM consentimientos WHERE jugador_id = ?",
+                           (ap1.get("id"),)).fetchone()
+    check(j1 == ("carla@example.cl", "+56987654321", "madre", int(anio), None) and com == (1,),
+          "jugador aprobado guarda correo, celular, parentesco, año y su flag de comunicaciones", (j1, com))
+
+    # Compatibilidad: un cliente viejo que solo manda tutor_contacto pasa la validación de datos (falla en fotos).
+    st, b = post(tok, "Viejo Uno", tutor_correo="", tutor_telefono="", tutor_parentesco="",
+                 tutor_contacto="+56 9 1111 2222")
+    check(st == 400 and codigo(b) == "faltan_fotos", "cliente viejo con tutor_contacto sigue funcionando", (st, b))
+
+    # Tope de solicitudes pendientes por enlace.
+    st, en2 = c.req("POST", "/inscripcion/enlaces", token=ti, data={"dias": "1"})
+    with sqlite3.connect(db_i) as conn:
+        conn.executemany(
+            "INSERT INTO solicitudes (codigo, enlace_id, nombre_nino, tutor_nombre, tutor_contacto, embeddings, modelo, "
+            "creado_en) VALUES (?, ?, 'Relleno', 'Tutor', 'x@example.cl', '[]', 'relleno', ?)",
+            [(f"RELL-{i:04d}", en2["id"], datetime.now().isoformat(sep=" ", timespec="seconds")) for i in range(120)])
+    st, b = post(en2["token"], "Tope Uno")
+    check(st == 429 and codigo(b) == "no_disponible", "enlace con 120 pendientes -> 429", (st, b))
+    with sqlite3.connect(db_i) as conn:
+        conn.execute("DELETE FROM solicitudes WHERE modelo = 'relleno'")
+
+    # Migración de solicitudes viejas (sin servidor, sobre una BD temporal).
+    sys.path.insert(0, str(ROOT))
+    from src.db_manager import Base
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as td:
+        base = Base(Path(td) / "asistencia.db")
+        base.init_db()
+        with base.conexion() as conn:
+            for i, contacto in enumerate(("Vieja@Example.cl", "+56 9 2222 3333", "12345")):
+                conn.execute("INSERT INTO solicitudes (codigo, nombre_nino, tutor_nombre, tutor_contacto, embeddings, "
+                             "modelo, creado_en) VALUES (?, 'N', 'T', ?, '[]', 'm', '2026-01-01')", (f"OLD-{i}", contacto))
+            conn.execute("DELETE FROM meta WHERE clave = 'migracion_contacto_v1'")
+        base.init_db()
+        with base.conexion() as conn:
+            filas = [tuple(r) for r in conn.execute(
+                "SELECT tutor_correo, tutor_telefono FROM solicitudes ORDER BY codigo").fetchall()]
+    check(filas == [("vieja@example.cl", None), (None, "+56922223333"), (None, None)],
+          "migración: tutor_contacto viejo -> correo o teléfono si calza", filas)
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -1124,7 +1438,7 @@ def main() -> int:
         F = preparar_fotos(a.fotos, tmp / "fotos")
         env = {**os.environ, "DATA_DIR": str(data_dir)}
         for slug, nombre, pin in (("sede-a", "Sede A", PIN_A), ("sede-b", "Sede B", PIN_B), ("sede-m", "Sede M", PIN_M),
-                                  ("sede-u", "Sede U", PIN_U)):
+                                  ("sede-u", "Sede U", PIN_U), ("sede-i", "Sede I", PIN_I)):
             subprocess.run([PY, "scripts/crear_sede.py", slug, nombre, "--pin", pin], cwd=ROOT, env=env, check=True,
                            stdout=subprocess.DEVNULL)
             cfg = ROOT / "data" / "config.json"  # misma configuración de reconocimiento que la instalación real

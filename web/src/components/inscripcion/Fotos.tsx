@@ -160,7 +160,7 @@ export function FotosPaso({
       <h1 className="ins-h" ref={titulo} tabIndex={-1}>
         Fotos del rostro
       </h1>
-      <p className="ins-p">Mínimo 2 fotos, máximo 3. Solo debe salir el niño o niña, sin gorro ni lentes oscuros.</p>
+      <p className="ins-p">2 o 3 fotos de la cara, para que la cámara de la cancha lo reconozca al llegar. De frente, con buena luz y solo el niño o niña en la foto, sin gorro ni lentes oscuros.</p>
 
       <div className="ins-slots" role="group" aria-label="Fotos">
         {fotos.map((f, i) => (

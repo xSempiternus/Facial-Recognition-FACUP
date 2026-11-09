@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
+from src.db_alertas import AlertasDB, crear_esquema as _crear_esquema_alertas
 from src.db_flujos import FlujosDB, crear_esquema as _crear_esquema_flujos
 
 # Columnas agregadas después de la primera versión: se crean si faltan en una BD existente.
@@ -18,10 +19,16 @@ from src.db_flujos import FlujosDB, crear_esquema as _crear_esquema_flujos
 _MIGRACIONES = {
     "jugadores": {"categoria": "TEXT", "creado_en": "DATETIME", "modelo": "TEXT",
                   "consentimiento_tutor": "TEXT", "consentimiento_fecha": "DATETIME",
-                  "estado": "TEXT NOT NULL DEFAULT 'activo'"},
+                  "estado": "TEXT NOT NULL DEFAULT 'activo'",
+                  # Datos del apoderado al aprobar una inscripción (NULL en inscripciones del staff y anteriores).
+                  # La autorización de comunicaciones vive en consentimientos.acepta_comunicaciones.
+                  "tutor_correo": "TEXT", "tutor_telefono": "TEXT", "tutor_parentesco": "TEXT",
+                  "anio_nacimiento": "INTEGER"},
     "asistencia": {"origen": "TEXT DEFAULT 'facial'", "estado": "TEXT NOT NULL DEFAULT 'valida'",
                    "motivo": "TEXT", "anulada_en": "DATETIME",
-                   "similitud": "REAL"},  # similitud del reconocimiento automático (NULL en las demás)
+                   "similitud": "REAL",  # similitud del reconocimiento automático (NULL en las demás)
+                   # revisión del staff (NULL = sin revisar): 'confirmado' | 'confirmado_lote' | 'no_es' (ver db_alertas)
+                   "revisado_por_staff": "TEXT", "revisado_en": "DATETIME"},
 }
 # Solo las asistencias válidas cuentan en reportes, conteos y "ya registrado".
 VALIDA = "a.estado = 'valida'"
@@ -50,7 +57,7 @@ def normalizar_categoria(nombre: str) -> str:
     return nombre
 
 
-class Base(FlujosDB):
+class Base(FlujosDB, AlertasDB):
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.respaldos_dir = self.db_path.parent / "respaldos"  # junto a la base de la sede
@@ -157,6 +164,7 @@ class Base(FlujosDB):
                 """
             )
             _crear_esquema_flujos(conn)
+            _crear_esquema_alertas(conn)
             # Siembra y migración de categorías: Sub-10 + toda categoría de texto libre ya usada por un jugador.
             conn.execute("UPDATE jugadores SET categoria = NULL WHERE trim(coalesce(categoria, '')) = ''")
             if conn.execute("SELECT COUNT(*) FROM categorias").fetchone()[0] == 0:
@@ -361,7 +369,12 @@ class Base(FlujosDB):
                 "INSERT INTO asistencia (jugador_id, timestamp, origen, similitud) VALUES (?, ?, ?, ?)",
                 (jugador_id, timestamp or _now(), origen, None if similitud is None else round(float(similitud), 4)),
             )
-            return cur.lastrowid
+            aid = cur.lastrowid
+        try:  # el niño volvió: sus alertas de faltas se cierran al instante (ver db_alertas)
+            self.cerrar_alertas_por_asistencia(jugador_id)
+        except sqlite3.Error:
+            pass
+        return aid
 
     def get_asistencias(self, limit: int = 50, solo_hoy: bool = False, fecha: str | None = None,
                         incluir_anuladas: bool = False) -> list[dict]:

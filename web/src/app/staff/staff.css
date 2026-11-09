@@ -810,6 +810,11 @@ input[type="range"].s-range {
   white-space: nowrap;
   transition: color 0.25s var(--ease), background-color 0.25s var(--ease), transform 0.25s var(--ease);
 }
+@media (max-width: 420px) {
+  .s-seg button {
+    padding: 0 10px;
+  }
+}
 .s-seg button:hover {
   color: var(--fg);
 }
@@ -1486,6 +1491,10 @@ input[type="range"].s-range {
   .s-crumbs {
     font-size: 16px;
   }
+  /* el h1 de la página ya dice dónde estás; la miga se veía cortada ("H", "N") */
+  .s-crumbs strong {
+    display: none;
+  }
   .s-btn.icon {
     width: 44px;
     height: 44px;
@@ -2120,6 +2129,12 @@ input[type="range"].s-range {
 }
 .s-tab {
   position: relative;
+}
+.s-tab span.s-count {
+  position: absolute;
+  top: 3px;
+  right: calc(50% - 22px);
+  overflow: visible;
 }
 
 .s-sol {

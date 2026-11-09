@@ -8,7 +8,8 @@ import { Hoja } from "@/components/staff/graficos/Hoja";
 import { Matriz } from "@/components/staff/graficos/Matriz";
 import { Tendencia } from "@/components/staff/graficos/Tendencia";
 import { Avatar, Badge, Button, ErrorCarga, PageHeader, Segmentado, Skeleton, Vacio, useQuery, useToast } from "@/components/staff/ui";
-import { api, descargarCsv, ordenarCategorias } from "@/lib/staff-api";
+import { MenuExportar } from "@/components/staff/MenuExportar";
+import { aISO, api, descargarCsv, ordenarCategorias } from "@/lib/staff-api";
 import {
   PERIODOS,
   cargarSeguimiento,
@@ -17,6 +18,7 @@ import {
   mensajeApoderado,
   pct0,
   plural,
+  rangos,
   type NinoResumen,
   type Periodo,
 } from "@/lib/staff-api-seguimiento";
@@ -84,6 +86,7 @@ export default function Seguimiento() {
           ))}
         </div>
       )}
+      <MenuExportar desde={rangos(periodo).desde} hasta={aISO(new Date())} categoria={cat} deshabilitado={!act} />
     </div>
   );
 

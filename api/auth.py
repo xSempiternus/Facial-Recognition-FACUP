@@ -108,6 +108,6 @@ def verificar_pin(pin: str, request: Request, sede: str) -> str:
     if not sedes.verificar_pin(sede, pin):
         cola.append(ahora)
         _fallos_global.append(ahora)
-        _error(401, "pin_incorrecto", "PIN incorrecto. Inténtalo de nuevo.")
+        _error(401, "pin_incorrecto", "Clave incorrecta. Inténtalo de nuevo.")
     cola.clear()
     return emitir_token(sede)

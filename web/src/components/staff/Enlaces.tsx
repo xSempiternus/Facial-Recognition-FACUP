@@ -109,12 +109,12 @@ export function Enlaces({ categorias, abiertoDeInicio }: { categorias: string[];
 
       {visible && (
         <div className="s-card-b" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <Alerta>El enlace es solo de esta sede y lo puede usar cualquiera que lo reciba hasta que venza. Compártelo solo con las familias.</Alerta>
+          <Alerta>Un mismo enlace sirve para todas las familias de la categoría (o de la sede) hasta que venza. Es solo de esta sede: compártelo solo con las familias.</Alerta>
           <div className="s-row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
             <Campo etiqueta="Categoría (opcional)">
               {(id) => (
                 <select id={id} className="s-select" value={categoria} onChange={(e) => setCategoria(e.target.value)}>
-                  <option value="">Que la elija la familia</option>
+                  <option value="">El apoderado la elige</option>
                   {categorias.map((c) => (
                     <option key={c} value={c}>
                       {c}
@@ -141,7 +141,7 @@ export function Enlaces({ categorias, abiertoDeInicio }: { categorias: string[];
             </Button>
           </div>
           {error && <Alerta tono="err">{error}</Alerta>}
-          {nuevo && <PanelQr url={nuevo.url} expira={nuevo.expira} />}
+          {nuevo && <PanelQr url={nuevo.url} expira={nuevo.expira} categoria={nuevo.categoria} />}
         </div>
       )}
 
@@ -176,7 +176,7 @@ export function Enlaces({ categorias, abiertoDeInicio }: { categorias: string[];
                   const [tono, texto] = ESTADO[e.estado];
                   return (
                     <tr key={e.id}>
-                      <td>{e.categoria ?? "Cualquiera"}</td>
+                      <td>{e.categoria ?? <span className="muted">La elige el apoderado</span>}</td>
                       <td className="hide-sm muted tnum">{fechaHora(e.expira)}</td>
                       <td>
                         <Badge tono={tono}>{texto}</Badge>

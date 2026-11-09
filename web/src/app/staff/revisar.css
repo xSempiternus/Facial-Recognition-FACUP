@@ -1,0 +1,215 @@
+/* «Revisar» (Hoy) y «Para contactar» (Hoy y Niños). Solo clases .rv-*; reutiliza los tokens de staff.css. */
+
+.rv-revisar .s-card-h h2,
+.rv-contactar .s-card-h h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rv-revisar .s-card-h p b {
+  color: var(--fg);
+  font-weight: 650;
+}
+
+.rv-barra {
+  height: 3px;
+  background: var(--inset);
+}
+.rv-barra span {
+  display: block;
+  height: 100%;
+  background: var(--brand-grad);
+  transition: width 0.4s var(--ease);
+}
+
+.rv-b {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 20px 18px;
+}
+.rv-listo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px;
+  color: var(--fg-2);
+  font-size: 14px;
+}
+.rv-listo svg {
+  color: var(--ok);
+}
+
+.rv-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rv-contactar .rv-lista {
+  padding: 4px 12px 10px;
+}
+.rv-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.rv-item:last-child {
+  border-bottom: 0;
+}
+/* Estado visual: dudoso (revisar) con un acento ámbar a la izquierda; pendiente con candidato, neutro. */
+.rv-item[data-tono="revisar"] {
+  box-shadow: inset 3px 0 0 var(--warn);
+  padding-left: 14px;
+}
+.rv-item[data-estado="nueva"] .rv-n b::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  vertical-align: middle;
+}
+.rv-fila {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+.rv-fila img {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  object-fit: cover;
+  flex: none;
+}
+.rv-n {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.rv-n b {
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rv-n small {
+  color: var(--fg-3);
+  font-size: 12.5px;
+}
+.rv-acc {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rv-acc .s-btn.sm {
+  min-height: 40px;
+}
+.rv-lote {
+  align-self: flex-start;
+}
+
+/* para contactar */
+.rv-contacto {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--fg-2);
+}
+.rv-contacto a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--brand);
+  text-decoration: none;
+  font-weight: 550;
+}
+.rv-contacto a:hover {
+  text-decoration: underline;
+}
+.rv-nota {
+  font-size: 13px;
+  color: var(--fg-2);
+  font-style: italic;
+}
+.rv-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 12px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+}
+.rv-seg-b {
+  height: 34px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background-color 0.2s var(--ease), color 0.2s var(--ease);
+}
+.rv-seg-b:hover {
+  color: var(--fg);
+}
+.rv-seg-b[aria-pressed="true"] {
+  background: var(--glass-solid);
+  color: var(--fg);
+  box-shadow: var(--hl), 0 1px 3px rgb(0 0 0 / 0.2);
+}
+.rv-seg-b:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+.rv-seg-b:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.rv-nota-f {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.rv-nota-f .s-input {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .rv-b {
+    padding: 12px 14px 16px;
+  }
+  .rv-acc {
+    width: 100%;
+  }
+  .rv-revisar .rv-acc .s-btn {
+    flex: 1;
+  }
+  .rv-lote {
+    align-self: stretch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rv-barra span,
+  .rv-seg-b {
+    transition: none;
+  }
+}

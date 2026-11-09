@@ -79,7 +79,7 @@ export function ContenidoApoderado({ nombre }: { nombre?: string }) {
           </Button>
         </Alerta>
       )}
-      {enlace ? <PanelQr url={enlace.url} expira={enlace.expira} /> : !error && <p className="muted">Preparando el código…</p>}
+      {enlace ? <PanelQr url={enlace.url} expira={enlace.expira} categoria={enlace.categoria} /> : !error && <p className="muted">Preparando el código…</p>}
 
       <button type="button" className="s-btn ghost sm" style={{ alignSelf: "flex-start" }} aria-expanded={opciones} onClick={() => setOpciones((v) => !v)}>
         <SlidersHorizontal size={14} aria-hidden /> {opciones ? "Ocultar opciones" : "Opciones del enlace"}
@@ -89,7 +89,7 @@ export function ContenidoApoderado({ nombre }: { nombre?: string }) {
           <Campo etiqueta="Categoría" ayuda="Si la eliges, la familia no tendrá que elegirla.">
             {(id) => (
               <select id={id} className="s-select" value={categoria} onChange={(e) => setCategoria(e.target.value)}>
-                <option value="">Que la elija la familia</option>
+                <option value="">El apoderado la elige</option>
                 {categorias.map((c) => (
                   <option key={c} value={c}>
                     {c}

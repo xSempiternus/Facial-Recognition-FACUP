@@ -3,7 +3,7 @@ import { cabeceraSede } from "@/lib/sede";
 // Cliente de la API de reconocimiento (FastAPI). Next la expone en /api/* (ver next.config.ts).
 
 export type Verificacion =
-  | { ok: true; nombre: string; categoria: string | null; yaRegistrado: boolean; registradoALas: string | null; similitud?: number; reporte?: string }
+  | { ok: true; nombre: string; categoria: string | null; yaRegistrado: boolean; registradoALas: string | null; similitud?: number; reporte?: string; revisar?: boolean } // revisar: aceptado con parecido justo (lo verá el staff)
   | { ok: false; codigo: string; mensaje: string; similitud?: number; aviso?: string; dudoso?: boolean }; // aviso: referencia de un "no reconocido" (backend nuevo); dudoso: se parece a alguien pero no con certeza (lo confirma el staff)
 
 const TIEMPO_MAX_MS = 18_000; // por intento (datos móviles lentos)
@@ -62,6 +62,7 @@ export async function verificar(foto: Blob, señal?: AbortSignal, alReintentar?:
       registradoALas: data.registrado_a_las ?? null,
       similitud: data.similitud,
       reporte: typeof data.reporte === "string" ? data.reporte : undefined,
+      revisar: data.revisar === true,
     };
   }
   const detalle = typeof data?.detail === "object" && data.detail ? data.detail : {};

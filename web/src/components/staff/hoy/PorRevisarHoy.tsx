@@ -10,7 +10,8 @@ const PRIMERAS = 3;
 
 /** Solo aparece si hay algo: llegadas que la cámara no reconoció (se resuelven aquí mismo) y solicitudes por aprobar. */
 export function PorRevisarHoy({ solicitudes }: { solicitudes: number }) {
-  const { lista } = usePendientes();
+  // Las llegadas con un candidato sugerido se resuelven en «Revisar» (RevisarTanda): aquí solo el resto.
+  const lista = usePendientes().lista.filter((p) => !(p.sugerido && p.motivo !== "nino_nuevo" && p.motivo !== "no_soy_yo"));
   const [todas, setTodas] = useState(false);
   if (lista.length === 0 && solicitudes === 0) return null;
   const visibles = todas ? lista : lista.slice(0, PRIMERAS);

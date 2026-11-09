@@ -1220,6 +1220,195 @@ body {
     max-height: 60dvh;
   }
 }
+/* Progreso con etiquetas: Hijo/a -> Apoderado -> Fotos -> Listo */
+.ins-etapas {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 0;
+  padding: 18px 22px 0;
+  list-style: none;
+}
+.ins-etapas li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: rgb(246 250 248 / 0.5);
+  transition: color 0.3s var(--ease-suave);
+}
+.ins-etapas li[data-on] {
+  color: rgb(246 250 248 / 0.92);
+}
+.ins-etapas li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ins-etapas i {
+  display: block;
+  height: 3px;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.16);
+  overflow: hidden;
+}
+.ins-etapas i::after {
+  content: "";
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #008d36, #95c11f);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.5s var(--ease-suave);
+}
+.ins-etapas li[data-on] i::after {
+  transform: scaleX(1);
+}
+.ins-sub {
+  margin-top: 22px;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.ins-opcional {
+  font-weight: 500;
+  color: rgb(246 250 248 / 0.55);
+}
+.ins-ayuda {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: rgb(246 250 248 / 0.62);
+}
+.ins-nota {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: rgb(246 250 248 / 0.88);
+  background: rgb(0 141 54 / 0.18);
+  box-shadow: inset 0 0 0 1px rgb(149 193 31 / 0.32);
+  overflow-wrap: anywhere;
+}
+fieldset.ins-campo {
+  min-width: 0;
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+}
+.ins-campo legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: rgb(246 250 248 / 0.75);
+}
+.ins-seg {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  background: rgb(255 255 255 / 0.08);
+}
+.ins-seg label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 44px;
+  border-radius: 10px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: rgb(246 250 248 / 0.8);
+  cursor: pointer;
+  transition:
+    background-color 0.2s var(--ease-suave),
+    color 0.2s var(--ease-suave);
+}
+.ins-seg input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.ins-seg label:has(input:checked) {
+  color: #006b2a;
+  background: #fff;
+}
+.ins-seg label:has(input:focus-visible) {
+  outline: 2px solid var(--color-verde-pantalla);
+  outline-offset: 1px;
+}
+.ins-tel {
+  display: flex;
+  gap: 8px;
+}
+.ins-tel > span {
+  display: grid;
+  place-items: center;
+  flex: none;
+  height: 52px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  background: rgb(255 255 255 / 0.04);
+  font-variant-numeric: tabular-nums;
+  color: rgb(246 250 248 / 0.75);
+}
+.ins-tel input {
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.ins-consent[data-corto] {
+  max-height: 22dvh;
+}
+.ins-pasos {
+  counter-reset: paso;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 0;
+  list-style: none;
+}
+.ins-pasos li {
+  display: flex;
+  gap: 12px;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  color: rgb(246 250 248 / 0.85);
+}
+.ins-pasos li::before {
+  counter-increment: paso;
+  content: counter(paso);
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-verde-pantalla);
+  background: rgb(255 255 255 / 0.1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ins-etapas li,
+  .ins-etapas i::after,
+  .ins-seg label {
+    transition: none;
+  }
+}
 
 /* ===== Fallo ===== */
 /* "No te reconocimos": una acción principal (verde de marca) y dos secundarias de vidrio. Alto fijo para no saltar. */

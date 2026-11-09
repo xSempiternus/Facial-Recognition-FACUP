@@ -22,10 +22,14 @@ from api.auth import _cliente
 from api.nucleo import (Sede, analizar, error, log, plantillas_sombra as _plantillas_sombra, precalentar_nombre,
                         sede_publica, sede_staff)
 from src import cv_engine, db_manager
+from src.db_flujos import PARENTESCOS, contacto_legado, normalizar_correo, normalizar_telefono_cl
 
 router = APIRouter()
 
 MAX_SOLICITUDES_PENDIENTES = 200
+# Un mismo enlace sirve para toda una categoría o sede (multiuso hasta que vence o se revoca). Tope de solicitudes
+# PENDIENTES por enlace, además de los límites por hora de api/limites.py (por IP y por token).
+MAX_PENDIENTES_POR_ENLACE = 120
 DIAS_ENLACE_MAX = 30
 # Fotos de celular de los padres: más grandes que las del kiosko (el frontend debería reducirlas antes de subir).
 MAX_BYTES_FOTO_PADRES = 8 * 1024 * 1024
@@ -35,8 +39,8 @@ MIN_FOTOS, MAX_FOTOS = 2, 3
 TOLERANCIA_INSCRIPCION = 0.10  # igual que /enroll: las fotos de una misma solicitud deben ser de la misma persona
 
 _NOMBRE_RE = re.compile(r"^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ' .-]{1,59}$")
-_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$")
 _TELEFONO_RE = re.compile(r"^\+?[0-9]{8,15}$")
+_SI = ("true", "1", "on", "si", "sí")
 
 _ENLACE_INVALIDO = "El enlace no es válido o ya venció. Pide uno nuevo al club."
 
@@ -65,15 +69,39 @@ def _nombre(valor: str, campo: str) -> str:
 
 
 def _contacto(valor: str) -> str:
+    """Campo libre antiguo (clientes viejos): correo o teléfono cualquiera."""
     valor = (valor or "").strip()
     if "@" in valor:
-        if len(valor) <= 254 and _EMAIL_RE.match(valor):
-            return valor.lower()
+        correo = normalizar_correo(valor)
+        if correo:
+            return correo
     else:
         tel = re.sub(r"[\s().-]", "", valor)
         if _TELEFONO_RE.match(tel):
             return tel
     error(400, "datos_invalidos", "Ingresa un correo o un teléfono válido.", campo="tutor_contacto")
+
+
+def _apoderado(correo: str, telefono: str, parentesco: str, contacto: str) -> dict:
+    """Correo (obligatorio, validado) + celular chileno (obligatorio, +569XXXXXXXX) + parentesco opcional.
+    Compatibilidad: un cliente viejo que solo manda `tutor_contacto` (sin correo ni teléfono) se acepta y se
+    reparte en correo o teléfono si calza."""
+    correo, telefono, parentesco = (correo or "").strip(), (telefono or "").strip(), (parentesco or "").strip().lower()
+    if not correo and not telefono and (contacto or "").strip():
+        libre = _contacto(contacto)
+        c, t = contacto_legado(libre)
+        return {"tutor_contacto": libre, "tutor_correo": c, "tutor_telefono": t, "tutor_parentesco": None}
+    c = normalizar_correo(correo)
+    if not c:
+        error(400, "datos_invalidos", "Revisa el correo: debe ser como nombre@dominio.cl.", campo="tutor_correo")
+    t = normalizar_telefono_cl(telefono)
+    if not t:
+        error(400, "datos_invalidos", "Revisa el celular: 9 dígitos que empiezan con 9 (ej: 9 1234 5678).",
+              campo="tutor_telefono")
+    if parentesco and parentesco not in PARENTESCOS:
+        error(400, "datos_invalidos", "Elige madre, padre u otro.", campo="tutor_parentesco")
+    return {"tutor_contacto": f"{c} / {t}", "tutor_correo": c, "tutor_telefono": t,
+            "tutor_parentesco": parentesco or None}
 
 
 def _anio(valor: str) -> int:
@@ -127,10 +155,13 @@ def info_inscripcion(request: Request, t: str = "", s: Sede = Depends(sede_publi
     e = _enlace_vigente(s, t)
     categorias = ([e["categoria"]] if e["categoria"]
                   else [c["nombre"] for c in s.db.listar_categorias(incluir_inactivas=False)])
+    com = consentimiento.VIGENTE_COMUNICACIONES
     return {"sede": {"slug": s.slug, "nombre": s.nombre}, "categorias": categorias,
             "categoria_fija": e["categoria"], "expira": e["expira"],
             "consentimiento": {"version": consentimiento.VIGENTE["version"],
                                "texto": consentimiento.VIGENTE["texto"]},
+            "comunicaciones": {"version": com["version"], "texto": com["texto"]},
+            "parentescos": list(PARENTESCOS),
             "fotos": {"minimo": MIN_FOTOS, "maximo": MAX_FOTOS, "max_mb": MAX_BYTES_FOTO_PADRES // (1024 * 1024)}}
 
 
@@ -142,8 +173,12 @@ async def inscribir(
     anio_nacimiento: str = Form(""),
     categoria: str = Form(""),
     tutor_nombre: str = Form(""),
-    tutor_contacto: str = Form(""),
+    tutor_contacto: str = Form(""),  # campo libre antiguo (solo clientes viejos)
+    tutor_correo: str = Form(""),
+    tutor_telefono: str = Form(""),
+    tutor_parentesco: str = Form(""),
     consentimiento_ok: str = Form("", alias="consentimiento"),
+    acepta_comunicaciones: str = Form(""),
     foto1: UploadFile | None = File(None),
     foto2: UploadFile | None = File(None),
     foto3: UploadFile | None = File(None),
@@ -157,13 +192,17 @@ async def inscribir(
     await run_in_threadpool(s.db.purgar_solicitudes)
     if await run_in_threadpool(s.db.contar_solicitudes) >= MAX_SOLICITUDES_PENDIENTES:
         error(429, "no_disponible", "Por ahora no podemos recibir más solicitudes. Inténtalo más tarde.")
+    if await run_in_threadpool(s.db.contar_solicitudes, e["id"]) >= MAX_PENDIENTES_POR_ENLACE:
+        error(429, "no_disponible", "Por ahora no podemos recibir más solicitudes. Inténtalo más tarde.")
 
     nombre = _nombre(nombre_nino, "nombre_nino")
     anio = _anio(anio_nacimiento)
     tutor = _nombre(tutor_nombre, "tutor_nombre")
-    contacto = _contacto(tutor_contacto)
-    if consentimiento_ok.strip().lower() not in ("true", "1", "on", "si", "sí"):
+    apoderado = _apoderado(tutor_correo, tutor_telefono, tutor_parentesco, tutor_contacto)
+    if consentimiento_ok.strip().lower() not in _SI:
         error(400, "sin_consentimiento", "Debes aceptar la autorización para continuar.", campo="consentimiento")
+    # Comunicaciones: opcional y separada. Solo cuenta un "sí" explícito (ausente o cualquier otra cosa = no).
+    acepta_com = acepta_comunicaciones.strip().lower() in _SI
     if e["categoria"]:
         cat = e["categoria"]
     elif categoria.strip():
@@ -210,13 +249,17 @@ async def inscribir(
             dup_sol, dup_sol_sim = sid, round(sim, 4)
 
     datos = {"enlace_id": e["id"], "nombre_nino": nombre, "anio_nacimiento": anio, "categoria": cat,
-             "tutor_nombre": tutor, "tutor_contacto": contacto, "embeddings": embeddings, "modelo": modelo,
+             "tutor_nombre": tutor, **apoderado, "acepta_comunicaciones": acepta_com,
+             "embeddings": embeddings, "modelo": modelo,
              "miniatura": caras[0].get("miniatura") or b"", "duplicado_de_id": dup_id, "duplicado_similitud": dup_sim,
              "duplicado_solicitud_id": dup_sol, "duplicado_solicitud_similitud": dup_sol_sim,
              # Modo sombra: plantillas SFace de los mismos recortes (las fotos no se guardan; al aprobar ya no existen).
              "embeddings_extra": _plantillas_sombra(caras)}
     evidencia = {"version": consentimiento.VIGENTE["version"], "texto_hash": consentimiento.VIGENTE["texto_hash"],
-                 "ip_hash": s.ip_hash(ip)}
+                 "ip_hash": s.ip_hash(ip),
+                 "comunicaciones": ({"version": consentimiento.VIGENTE_COMUNICACIONES["version"],
+                                     "texto_hash": consentimiento.VIGENTE_COMUNICACIONES["texto_hash"]}
+                                    if acepta_com else None)}
     sid, codigo = await run_in_threadpool(s.db.crear_solicitud, datos, evidencia)
     s.db.auditar("solicitud_recibida", f"solicitud #{sid} enlace #{e['id']}")
     return {"status": "pendiente", "codigo": codigo}
@@ -235,6 +278,8 @@ def listar_solicitudes(s: Sede = Depends(sede_staff)):
             "id": d["id"], "codigo": d["codigo"], "creado_en": d["creado_en"],
             "nombre_nino": d["nombre_nino"], "anio_nacimiento": d["anio_nacimiento"], "categoria": d["categoria"],
             "tutor_nombre": d["tutor_nombre"], "tutor_contacto": d["tutor_contacto"],
+            "tutor_correo": d["tutor_correo"], "tutor_telefono": d["tutor_telefono"],
+            "tutor_parentesco": d["tutor_parentesco"], "acepta_comunicaciones": bool(d["acepta_comunicaciones"]),
             "fotos": d["fotos"], "compatible": d["modelo"] == modelo,
             "miniatura": base64.b64encode(d["miniatura"] or b"").decode(),
             "duplicado": ({"jugador_id": d["duplicado_de_id"], "nombre": jug["nombre"],

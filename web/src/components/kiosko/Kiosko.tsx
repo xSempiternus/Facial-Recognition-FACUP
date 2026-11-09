@@ -24,6 +24,7 @@ import { useLuz } from "./luz";
 import Marco, { type Guia, type ModoMarco } from "./Marco";
 import { crearRastro, PUNTOS_REF, type Rastro } from "./rastro";
 import Rodillo from "./Rodillo";
+import FranjaTanda, { FRANJA_MAX, type ItemTanda } from "./FranjaTanda";
 import Tarjeta, { type TextoTarjeta } from "./Tarjeta";
 import { k } from "./tiempo";
 import { capturarFoto, useRastreoCara, type Desvio, type Objetivo, type Postura } from "./useRastreoCara";
@@ -36,6 +37,13 @@ const GRACIAS_MS = 2800; // tras "¿No eres tú?", el mensaje de gracias queda v
 const AYUDA_CONFIRMADA_MS = 3500; // "Listo, un entrenador te ayudará": queda visible este tiempo y se vuelve a escanear
 const ABANDONO_MS = 20_000; // "No te reconocimos" sin tocar nada: se envía aviso "abandono" y se vuelve al flujo normal
 const ESPERA_MISMO_NIÑO_MS = 4000; // tras un resultado, no vuelve a escanear a quien sigue frente a la cámara: 4 s o hasta que salga del encuadre
+// Modo tanda (por defecto; ?tanda=0 lo apaga): llega un grupo y hay un solo staff. Tras reconocer, la tarjeta dura
+// poco y se recoge en la franja «Registrados ahora»; el siguiente escanea casi de inmediato. Si el mismo niño vuelve a
+// pasar, el servidor responde "ya registrado" y solo se ilumina su ítem (no se registra dos veces).
+const TANDA_TARJETA_MS = 1200;
+const TANDA_ESPERA_MS = 1500; // espera corta tras un resultado en tanda (o hasta que salga del encuadre)
+const TANDA_DUPLICADO_MS = 90_000; // "ya registrado" de alguien que está en la franja desde hace menos de esto: sin tarjeta
+const TANDA_BRILLO_MS = 1600;
 const EASE = [0.22, 1, 0.36, 1] as const;
 const ESCRITORIO_DESDE = 900; // ancho (px) desde el que la cámara va en un escenario centrado
 
@@ -174,6 +182,13 @@ const DEMO_PUNTOS: [number, number][] = [
 ];
 const DEMO_CAJA = { x0: 95, y0: 255, x1: 290, y1: 482 };
 const DEMO_SIN_CARA = new Set(["buscando", "error", "camara", "denegada"]);
+// ?demo=tanda: franja «Registrados ahora» de ejemplo (uno para revisar).
+const DEMO_FRANJA: ItemTanda[] = [
+  { id: "d1", nombre: "Matías", hora: "16:05", revisar: false, reporte: "demo", t: 8.64e15, estado: "libre" },
+  { id: "d2", nombre: "Josefa", hora: "16:05", revisar: true, reporte: "demo", t: 8.64e15, estado: "libre" },
+  { id: "d3", nombre: "Benjamín", hora: "16:04", revisar: false, reporte: null, t: 0, estado: "libre" },
+  { id: "d4", nombre: "Florencia", hora: "16:04", revisar: false, reporte: null, t: 0, estado: "avisado" },
+];
 
 export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   usePantallaActiva(true); // la pantalla no se apaga mientras el kiosko esté abierto
@@ -216,13 +231,27 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   const [repetir, setRepetir] = useState(0); // solo demo: tocar la pantalla repite la secuencia
   const voz = useRef(true);
   const prueba = useRef(false);
+  const tanda = useRef(true);
+  const [franja, setFranja] = useState<ItemTanda[]>([]); // «Registrados ahora» (modo tanda), del más nuevo al más viejo
+  const franjaRef = useRef<ItemTanda[]>([]);
+  const [destacado, setDestacado] = useState<string | null>(null);
+  const [tandaRapida, setTandaRapida] = useState(false); // el resultado actual sigue el ritmo de tanda (tarjeta corta)
 
   // La voz está apagada por defecto (suenan los efectos); ?voz=1 la enciende. ?prueba=1 deja el resultado en pantalla hasta tocarla (para el staff).
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     voz.current = q.get("voz") === "1";
     prueba.current = q.get("prueba") === "1";
+    tanda.current = q.get("tanda") !== "0";
   }, []);
+  useEffect(() => {
+    franjaRef.current = franja;
+  }, [franja]);
+  useEffect(() => {
+    if (!destacado) return;
+    const id = setTimeout(() => setDestacado(null), TANDA_BRILLO_MS);
+    return () => clearTimeout(id);
+  }, [destacado]);
 
   // Nivel de calidad del dispositivo, conexión en caliente y voz desbloqueada por el primer toque (iOS lo exige).
   useEffect(() => {
@@ -395,6 +424,35 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     }, cara);
     if (pendiente.current !== ctl) return; // cancelada o reemplazada
     setReintentandoRed(false);
+    // Tanda: el mismo niño volvió a pasar (está en la franja hace poco) -> sin tarjeta; se ilumina su ítem y se sigue.
+    if (tanda.current && v.ok && v.yaRegistrado) {
+      const pila = v.nombre.split(" ")[0];
+      const previo = franjaRef.current.find((i) => i.nombre === pila && Date.now() - i.t < TANDA_DUPLICADO_MS);
+      if (previo) {
+        setDestacado(previo.id);
+        setFotoUrl(null);
+        setResultado(null);
+        setReporte(null);
+        setFase("escaneando");
+        setEsperarSalida(true);
+        return;
+      }
+    }
+    const nueva = tanda.current && v.ok && !v.yaRegistrado;
+    setTandaRapida(nueva);
+    if (nueva) {
+      const ahora = new Date();
+      const item: ItemTanda = {
+        id: `${ahora.getTime()}-${Math.random().toString(36).slice(2, 7)}`,
+        nombre: v.nombre.split(" ")[0],
+        hora: ahora.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false }),
+        revisar: Boolean(v.revisar),
+        reporte: v.reporte ?? null,
+        t: ahora.getTime(),
+        estado: "libre",
+      };
+      setFranja((l) => [item, ...l].slice(0, FRANJA_MAX));
+    }
     const { resultado, frase } = aResultado(v);
     // El contador sube cuando la secuencia de éxito avanza: el rodillo se ve, no pasa de golpe.
     if (v.ok && !v.yaRegistrado) {
@@ -507,6 +565,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
     else if (r?.tono === "exito") {
       if (estadoReporte === "enviado" || estadoReporte === "limite") ms = GRACIAS_MS;
       else if (r.sobrio) ms = YA_REGISTRADO_MS;
+      else if (tandaRapida) ms = TANDA_TARJETA_MS; // "No es él" vive en la franja: la tarjeta se recoge enseguida
       else ms = reporte ? VENTANA_NO_ERES_TU_MS : MOSTRAR_RESULTADO_MS;
     } else ms = AVISO_MS;
     const id = setTimeout(() => {
@@ -515,7 +574,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
       terminarResultado();
     }, ms);
     return () => clearTimeout(id);
-  }, [fase, terminarResultado, estadoReporte, ayuda, resultadoReal, reporte, avisoActual, enDemo]);
+  }, [fase, terminarResultado, estadoReporte, ayuda, resultadoReal, reporte, avisoActual, enDemo, tandaRapida]);
 
   // "Reintentar": reinicia el escaneo al instante y descarta el aviso pendiente.
   const reintentarAhora = useCallback(() => {
@@ -547,6 +606,20 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
       sonar("aviso");
     } else setEstadoReporte(r);
   }, [reporte, estadoReporte]);
+  // Franja de tanda: "No es él" sobre un ítem usa su reporte de un solo uso (mismo flujo que "¿No eres tú?").
+  const noEsDeLaFranja = useCallback(
+    async (item: ItemTanda) => {
+      if (!item.reporte || item.estado === "enviando" || item.estado === "avisado") return;
+      const fijar = (estado: ItemTanda["estado"], sinReporte = false) =>
+        setFranja((l) => l.map((i) => (i.id === item.id ? { ...i, estado, reporte: sinReporte ? null : i.reporte } : i)));
+      fijar("enviando");
+      const r = enDemo ? "ok" : await noSoyYo(item.reporte);
+      if (r === "ok") fijar("avisado", true);
+      else fijar(r);
+    },
+    [enDemo],
+  );
+
   // Espera tras un resultado: termina al salir del encuadre o a los ESPERA_MISMO_NIÑO_MS, lo que ocurra primero
   // (el plazo corre una sola vez: los cambios de postura ya no lo reinician).
   const salioDelEncuadre = postura === "sin-cara";
@@ -554,7 +627,8 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
   useEffect(() => {
     if (!esperarSalida) return;
     if (!inicioEspera.current) inicioEspera.current = performance.now();
-    const resta = salioDelEncuadre ? 0 : Math.max(0, ESPERA_MISMO_NIÑO_MS - (performance.now() - inicioEspera.current));
+    const espera = tanda.current ? TANDA_ESPERA_MS : ESPERA_MISMO_NIÑO_MS;
+    const resta = salioDelEncuadre ? 0 : Math.max(0, espera - (performance.now() - inicioEspera.current));
     const id = setTimeout(() => setEsperarSalida(false), resta);
     return () => clearTimeout(id);
   }, [esperarSalida, salioDelEncuadre]);
@@ -846,7 +920,7 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
               )}
             </AnimatePresence>
 
-            {exito && !sobrio && (reporte || estadoReporte === "enviado") && (
+            {exito && !sobrio && !tandaRapida && (reporte || estadoReporte === "enviado") && (
               <div className="flex min-h-[44px] items-center justify-center" onClick={(e) => e.stopPropagation()}>
                 {estadoReporte === "enviado" ? (
                   <p role="status" className="reco-texto text-[0.95rem] font-medium text-white/90">
@@ -901,6 +975,11 @@ export default function Kiosko({ onSalir }: { onSalir?: () => void }) {
                   Reintentar
                 </button>
               </div>
+            )}
+
+            {/* Tanda: «Registrados ahora» (últimos 5, tocables para "No es él"). Fuera de los avisos y la cámara caída. */}
+            {!sinCamara && !(resultadoVisible && tono === "aviso") && (
+              <FranjaTanda items={demo === "tanda" ? DEMO_FRANJA : franja} destacado={destacado} onNoEs={(i) => void noEsDeLaFranja(i)} />
             )}
 
             {/* Llegadas de hoy: una línea discreta de alto fijo (no se mueve al cargar ni al subir el número) */}

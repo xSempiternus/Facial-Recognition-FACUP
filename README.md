@@ -203,6 +203,45 @@ data/voz/                          caché de audio compartida (solo nombres de p
 - `GET /reportes?desde&hasta&tipo` (por defecto, últimos 30 días)
 - `GET /config`, `PUT /config` — `{"modelo", "detector", "umbral", "antispoofing"?}`
 - `GET /health` (público, solo `{"status":"ok"}`) y `GET /health/detalle` (staff)
+- `GET /revision/hoy`, `POST /revision/{asistencia_id}` (form `accion`: confirmar | no_es), `POST /revision/confirmar-seguros` — revisión de la tanda (ver abajo).
+- `GET /alertas` (`?cerradas=true`), `GET /alertas/resumen`, `PATCH /alertas/{id}` (form `estado?`, `nota?`) — ver «Alertas».
+
+## Revisión de la tanda
+
+Las asistencias del reconocimiento facial guardan `asistencia.similitud`. En **Hoy → Revisar** el staff ve las aceptadas
+con parecido justo (similitud < umbral automático + 0,05) y los pendientes con candidato sugerido, y las confirma o
+corrige con un toque; «Confirmar las N llegadas seguras» marca el resto. Queda en `asistencia.revisado_por_staff`
+(`confirmado` | `confirmado_lote` | `no_es`, NULL = sin revisar) y `asistencia.revisado_en` (columnas nuevas,
+NULL-ables, migración automática). `no_es` anula la asistencia; el staff marca al niño correcto con «Marcar a mano».
+`/verify` agrega `revisar: true|false` (sin puntaje) para la franja «Registrados ahora» del kiosko (modo tanda,
+por defecto; `?tanda=0` lo apaga).
+
+## Alertas
+
+Tabla `alertas` en la base de cada sede (`src/db_alertas.py`, creada sola al arrancar):
+
+| columna | descripción |
+|---|---|
+| `id`, `jugador_id` | FK a `jugadores` (ON DELETE CASCADE: borrar al niño borra sus alertas) |
+| `tipo` | hoy solo `faltas_seguidas` |
+| `valor` | n.º de faltas seguidas (se actualiza mientras siga abierta) |
+| `creada_en` | cuándo se detectó |
+| `estado` | `nueva` → `vista` → `contactada` → `cerrada` |
+| `nota` | nota libre del staff (≤ 500) |
+| `actualizada_por`, `actualizada_en` | `staff` o `sistema` |
+| `cerrada_en`, `motivo_cierre` | `asistio` (automático), `staff` o `inactivo` |
+
+- Se crea cuando un inscrito activo llega a ≥ `umbral_faltas` faltas seguidas (en el `config.json` de la sede; por
+  defecto 3). Una falta = una jornada **ya realizada de su categoría** (fecha pasada con ≥ 1 asistencia válida de
+  un niño de esa categoría, o día marcado en `/jornadas`) desde su última asistencia y desde su alta; hoy no cuenta.
+- Idempotente: a lo más una abierta por jugador y tipo (índice único parcial). Si el staff la cierra, no se recrea
+  hasta que el niño asista y junte una racha nueva. Se cierra sola cuando el niño asiste (y se reabre si esa
+  asistencia se anula).
+- Se evalúa en `GET /alertas`, al marcar una jornada, en la tarea horaria y de forma perezosa en `/metricas/hoy`.
+- **Para campañas por correo** (módulo futuro): leer `SELECT ... FROM alertas WHERE estado IN ('nueva','vista')`
+  junto a `jugadores` (contacto del apoderado en `tutor_correo`/`tutor_telefono` cuando existan; si no, el
+  `contacto` del último consentimiento vigente) y, al enviar, pasar la alerta a `contactada` con una `nota`
+  (`PATCH /alertas/{id}`), para que el staff no llame dos veces.
 
 ## Privacidad
 

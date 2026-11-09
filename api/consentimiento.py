@@ -45,3 +45,24 @@ def texto_hash(texto: str) -> str:
 
 
 VIGENTE = {"version": VERSION_V1, "texto": CONSENTIMIENTO_V1, "texto_hash": texto_hash(CONSENTIMIENTO_V1)}
+
+
+# Autorización de comunicaciones: SEPARADA del consentimiento biométrico, opcional y sin premarcar. Se guarda en la
+# misma tabla de evidencia (`consentimientos.acepta_comunicaciones` + versión, hash y fecha). Quien no la acepta
+# NUNCA debe recibir campañas ni recordatorios (el envío es una función futura: este flag es la única fuente).
+# BORRADOR — PENDIENTE DE REVISIÓN LEGAL, igual que la V1 de arriba.
+VERSION_COMUNICACIONES_V1 = "com-v1-borrador-2026-11"
+
+COMUNICACIONES_V1 = """\
+Autorización para recibir comunicaciones del club (opcional)
+
+Autorizo al club a escribirme al correo y al teléfono (llamada, SMS o WhatsApp) que indiqué, solo para temas de \
+la escuela de fútbol de mi hijo o hija: avisos de asistencia (por ejemplo, si falta varias veces seguidas), \
+cambios de horario, partidos y novedades de la sede.
+
+No se usarán para publicidad de terceros ni se compartirán. Es voluntaria: si no la doy, la inscripción sigue \
+igual. Puedo retirarla cuando quiera hablando con el encargado de la sede o respondiendo a cualquiera de los \
+mensajes."""
+
+VIGENTE_COMUNICACIONES = {"version": VERSION_COMUNICACIONES_V1, "texto": COMUNICACIONES_V1,
+                          "texto_hash": texto_hash(COMUNICACIONES_V1)}

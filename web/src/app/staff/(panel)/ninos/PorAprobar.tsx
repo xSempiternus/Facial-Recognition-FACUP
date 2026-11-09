@@ -2,15 +2,35 @@
 
 // Pestaña «Por aprobar»: inscripciones que mandan las familias. Nada entra hasta que el staff lo aprueba.
 
-import { Check, ClipboardCheck, TriangleAlert, X } from "lucide-react";
+import { Check, ClipboardCheck, Mail, Phone, TriangleAlert, X } from "lucide-react";
 import { useState } from "react";
-import { CamposInvitado, useCategoriasActivas } from "@/components/staff/NinoNuevo";
+import { useCategoriasActivas } from "@/components/staff/NinoNuevo";
 import { Alerta, Button, Campo, SkeletonRows, Vacio, useToast } from "@/components/staff/ui";
+import { telefonoLegible } from "@/lib/inscripcion-api";
 import { api, sinTildes, textoError, type Jugador, type Solicitud } from "@/lib/staff-api";
 import { primerNombre } from "@/lib/staff-api-ninos";
 import { Hoja } from "./Hoja";
 
 export type DatosAprobar = { solicitudes: Solicitud[]; invitados: Jugador[] };
+
+const PARENTESCO: Record<string, string> = { madre: "madre", padre: "padre", otro: "apoderado/a" };
+
+/** Categoría sugerida por año de nacimiento: primero una categoría cuyo nombre incluya el año (o un rango
+ * "2015-2016"); si no, la "Sub-N" más chica en la que entra (edad cumplida en el año ≤ N). Solo una sugerencia. */
+export function sugerirCategoria(anio: number | null | undefined, categorias: string[], hoy = new Date().getFullYear()): string | null {
+  if (!anio) return null;
+  const porAnio = categorias.find((c) => {
+    const ys = (c.match(/\b(?:19|20)\d{2}\b/g) ?? []).map(Number);
+    return ys.length > 0 && anio >= Math.min(...ys) && anio <= Math.max(...ys);
+  });
+  if (porAnio) return porAnio;
+  const edad = hoy - anio;
+  const subs = categorias
+    .map((c) => ({ c, n: Number(/(?:sub|u)\s*-?\s*(\d{1,2})\b/i.exec(c)?.[1] ?? 0) }))
+    .filter((x) => x.n > 0)
+    .sort((a, b) => a.n - b.n);
+  return subs.find((x) => edad <= x.n)?.c ?? null;
+}
 
 export function ListaPorAprobar({
   datos,
@@ -41,8 +61,8 @@ export function ListaPorAprobar({
     }
   }
 
-  // Con un posible duplicado o invitados por vincular se pide confirmar; si no, un toque basta.
-  const alAprobar = (s: Solicitud) => (s.duplicado || (datos?.invitados.length ?? 0) > 0 ? setAprobar(s) : void aprobarDirecto(s));
+  // Con un posible duplicado, invitados por vincular o sin categoría se abre la hoja; si no, un toque basta.
+  const alAprobar = (s: Solicitud) => (s.duplicado || !s.categoria || (datos?.invitados.length ?? 0) > 0 ? setAprobar(s) : void aprobarDirecto(s));
 
   if (cargando && !datos) {
     return (
@@ -78,9 +98,27 @@ export function ListaPorAprobar({
               <div style={{ minWidth: 0 }}>
                 <h3>{s.nombre_nino}</h3>
                 <p>
-                  {s.categoria ?? "Sin categoría"} · lo inscribe <b style={{ color: "var(--fg)", fontWeight: 550 }}>{s.tutor_nombre}</b>
+                  {s.categoria ?? <span className="nn-completar">Sin categoría · completar</span>}
+                  {s.anio_nacimiento ? ` · ${s.anio_nacimiento}` : ""} · lo inscribe <b style={{ color: "var(--fg)", fontWeight: 550 }}>{s.tutor_nombre}</b>
+                  {s.tutor_parentesco ? ` (${PARENTESCO[s.tutor_parentesco] ?? s.tutor_parentesco})` : ""}
                 </p>
-                {s.tutor_contacto && <p>{s.tutor_contacto}</p>}
+                {s.tutor_correo || s.tutor_telefono ? (
+                  <p className="nn-contacto">
+                    {s.tutor_correo && (
+                      <span>
+                        <Mail size={13} aria-hidden /> {s.tutor_correo}
+                      </span>
+                    )}
+                    {s.tutor_telefono && (
+                      <span>
+                        <Phone size={13} aria-hidden /> {telefonoLegible(s.tutor_telefono)}
+                      </span>
+                    )}
+                  </p>
+                ) : (
+                  s.tutor_contacto && <p>{s.tutor_contacto}</p>
+                )}
+                {s.acepta_comunicaciones !== undefined && <p className="nn-com">{s.acepta_comunicaciones ? "Acepta recibir comunicaciones" : "No autorizó comunicaciones: no contactar por campañas"}</p>}
               </div>
             </div>
             {s.duplicado && (
@@ -147,6 +185,8 @@ function HojaAprobar({ s, invitados, onCerrar, onListo }: { s: Solicitud; invita
   const [error, setError] = useState<string | null>(null);
   const opciones = s.categoria && !categorias.includes(s.categoria) ? [s.categoria, ...categorias] : categorias;
   const elegido = invitados.find((i) => i.id === invitadoId);
+  const falta = !s.categoria;
+  const sugerida = falta ? sugerirCategoria(s.anio_nacimiento, categorias) : null;
 
   async function enviar() {
     setTrabajando(true);
@@ -181,7 +221,31 @@ function HojaAprobar({ s, invitados, onCerrar, onListo }: { s: Solicitud; invita
         </Alerta>
       )}
       {error && <Alerta tono="err">{error}</Alerta>}
-      <CamposInvitado nombre={nombre} categoria={categoria} categorias={opciones} onNombre={setNombre} onCategoria={setCategoria} />
+      <Campo etiqueta="Nombre y apellido del niño">
+        {(id) => <input id={id} className="s-input" value={nombre} maxLength={60} autoComplete="off" onChange={(e) => setNombre(e.target.value)} />}
+      </Campo>
+      <div className={falta && !categoria ? "nn-falta" : undefined}>
+        <Campo
+          etiqueta={falta ? "Categoría (la familia no la eligió)" : "Categoría"}
+          ayuda={falta ? (s.anio_nacimiento ? `Nació en ${s.anio_nacimiento}. Si la dejas vacía, queda «Sin categoría» y la completas después en Niños.` : "Si la dejas vacía, queda «Sin categoría» y la completas después en Niños.") : undefined}
+        >
+          {(id) => (
+            <select id={id} className="s-select" value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+              <option value="">Sin categoría</option>
+              {opciones.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          )}
+        </Campo>
+        {sugerida && categoria !== sugerida && (
+          <Button sm variante="ghost" style={{ marginTop: 6 }} onClick={() => setCategoria(sugerida)}>
+            Usar {sugerida} (sugerida por el año)
+          </Button>
+        )}
+      </div>
       {invitados.length > 0 && (
         <Campo etiqueta="¿Vino a probarse antes?" ayuda="Elígelo para que conserve las asistencias que ya tenía.">
           {(id) => (

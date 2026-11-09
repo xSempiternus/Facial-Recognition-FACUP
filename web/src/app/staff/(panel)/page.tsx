@@ -10,9 +10,12 @@ import { Anillo } from "@/components/staff/hoy/Anillo";
 import { Curva } from "@/components/staff/hoy/Curva";
 import { ListaHoy } from "@/components/staff/hoy/ListaHoy";
 import { PorRevisarHoy } from "@/components/staff/hoy/PorRevisarHoy";
+import { RevisarTanda } from "@/components/staff/hoy/RevisarTanda";
+import { ParaContactar } from "@/components/staff/ParaContactar";
 import { Button, ErrorCarga, PageHeader, Skeleton } from "@/components/staff/ui";
 import { useHoy } from "@/lib/staff-api-hoy";
 import "../hoy.css";
+import "../revisar.css";
 
 const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -93,7 +96,11 @@ export default function Hoy() {
       </div>
       <MarcarRapido abierto={marcando} onCerrar={() => setMarcando(false)} onCambio={reload} />
 
+      <RevisarTanda clave={`${data?.revision?.total}-${data?.revision?.revisados}-${data?.llegaron.length}`} onCambio={reload} onCorregir={() => setMarcando(true)} />
+
       <PorRevisarHoy solicitudes={data?.por_revisar.solicitudes ?? 0} />
+
+      <ParaContactar id="para-contactar" />
 
       {data ? (
         <ListaHoy data={data} onCambio={reload} />

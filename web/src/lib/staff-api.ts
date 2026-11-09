@@ -193,7 +193,12 @@ export type Solicitud = {
   anio_nacimiento: number | null;
   categoria: string | null;
   tutor_nombre: string;
+  /** Campo libre antiguo; en solicitudes nuevas es "correo / teléfono". */
   tutor_contacto: string;
+  tutor_correo?: string | null;
+  tutor_telefono?: string | null;
+  tutor_parentesco?: "madre" | "padre" | "otro" | null;
+  acepta_comunicaciones?: boolean;
   fotos: number;
   compatible: boolean;
   miniatura: string;

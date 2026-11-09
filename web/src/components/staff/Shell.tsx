@@ -20,6 +20,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { api, cerrarSesion, escucharPendientes, leerToken, listarSedes, suscribirSesion, type SedeLista } from "@/lib/staff-api";
 import { nombreSedeGuardado, rutaSede, sedeGuardada } from "@/lib/sede";
+import { apiSeguimiento, escucharAlertas } from "@/lib/staff-api-alertas";
 import { BotonCambiarSede } from "./CambiarSede";
 import { usePendientes } from "./Pendientes";
 import { Skeleton } from "./ui";
@@ -81,6 +82,34 @@ function usePendientesSolicitudes(activo: boolean, ruta: string) {
   return n;
 }
 
+/** Niños «Para contactar» (alertas nueva + vista): al entrar, al volver, cada 2 min y cuando una pantalla lo avisa. */
+function useAlertasPorContactar(activo: boolean, ruta: string) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    if (!activo) return;
+    let vivo = true;
+    const cargar = () =>
+      apiSeguimiento
+        .conteoAlertas()
+        .then((c) => vivo && setN(c.por_contactar))
+        .catch(() => {
+          /* el globo es solo informativo (backend viejo: sin /alertas) */
+        });
+    cargar();
+    const t = window.setInterval(cargar, 120_000);
+    const al = () => document.visibilityState === "visible" && cargar();
+    document.addEventListener("visibilitychange", al);
+    const off = escucharAlertas((c) => vivo && setN(c.por_contactar));
+    return () => {
+      vivo = false;
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", al);
+      off();
+    };
+  }, [activo, ruta]);
+  return n;
+}
+
 /** Sedes activas para el selector (una sola vez por carga). Si falla, no se muestra el botón. */
 function useSedes(activo: boolean) {
   const [lista, setLista] = useState<SedeLista[]>([]);
@@ -128,7 +157,11 @@ export function Shell({ children }: { children: ReactNode }) {
   const [paleta, setPaleta] = useState(false);
   const sede = useNombreSede();
   const sedes = useSedes(!!token);
-  const pendientes = usePendientesSolicitudes(!!token, ruta);
+  const solicitudes = usePendientesSolicitudes(!!token, ruta);
+  const porContactar = useAlertasPorContactar(!!token, ruta);
+  // Globo de «Niños»: solicitudes por aprobar + niños para contactar (faltas seguidas).
+  const pendientes = solicitudes + porContactar;
+  const etiquetaNinos = [solicitudes && `${solicitudes} por aprobar`, porContactar && `${porContactar} para contactar`].filter(Boolean).join(", ");
   const { total: porRevisar } = usePendientes();
 
   useEffect(() => {
@@ -186,7 +219,7 @@ export function Shell({ children }: { children: ReactNode }) {
                   <n.icono size={17} aria-hidden />
                   <span>{n.texto}</span>
                   {n.href === "/staff/ninos" && pendientes > 0 && (
-                    <span className="s-count" aria-label={`${pendientes} por aprobar`}>
+                    <span className="s-count" aria-label={etiquetaNinos}>
                       {pendientes}
                     </span>
                   )}
@@ -256,7 +289,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 <n.icono size={20} aria-hidden />
                 <span>{n.corto ?? n.texto}</span>
                 {n.href === "/staff/ninos" && pendientes > 0 && (
-                  <span className="s-count" aria-label={`${pendientes} por aprobar`}>
+                  <span className="s-count" aria-label={etiquetaNinos}>
                     {pendientes}
                   </span>
                 )}

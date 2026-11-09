@@ -150,7 +150,12 @@ def set_config(modelo: str, detector: str, umbral: float, antispoofing: bool | N
         DeepFace.build_model("Fasnet", task="spoofing")
     ruta.parent.mkdir(parents=True, exist_ok=True)
     tmp = ruta.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(nuevo, indent=2), encoding="utf-8")
+    try:  # claves que no son del reconocimiento (p. ej. `umbral_faltas` de las alertas) se conservan
+        previo = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+        previo = previo if isinstance(previo, dict) else {}
+    except (ValueError, OSError):
+        previo = {}
+    tmp.write_text(json.dumps({**previo, **nuevo}, indent=2), encoding="utf-8")
     tmp.replace(ruta)
     cfg.update(nuevo)  # sin clear(): otra petición concurrente nunca ve la config vacía
     return dict(cfg)

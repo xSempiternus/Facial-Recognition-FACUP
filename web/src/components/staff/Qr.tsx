@@ -2,9 +2,10 @@
 
 // QR generado en el navegador (librería local `qrcode`, sin servicios externos) + panel para compartir un enlace.
 
-import { Check, Copy, Expand, Share2 } from "lucide-react";
+import { Check, Copy, Expand, Link2, Mail, MessageCircle, Share2 } from "lucide-react";
 import { create } from "qrcode";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
+import { nombreSedeGuardado } from "@/lib/sede";
 import { fechaHora } from "@/lib/staff-api";
 import { Button, Dialogo, useToast } from "./ui";
 
@@ -53,25 +54,52 @@ async function copiar(texto: string): Promise<boolean> {
   }
 }
 
-/** QR grande + enlace + Copiar / Compartir / Pantalla completa. */
-export function PanelQr({ url, expira, titulo = "Formulario de inscripción" }: { url: string; expira: string; titulo?: string }) {
+const sinSuscripcion = () => () => {};
+const sinNombre = () => undefined;
+
+function fechaLarga(iso: string): string {
+  const d = new Date(iso.replace(" ", "T"));
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("es-CL", { weekday: "long", day: "numeric", month: "long" });
+}
+
+/** Mensaje prellenado para las familias (WhatsApp, correo, copiar). Un mismo enlace sirve para todas. */
+export function mensajeInvitacion(url: string, expira: string, sede?: string, categoria?: string | null) {
+  const nombreSede = sede ? (/^sede\s/i.test(sede) ? sede : `Sede ${sede}`) : "";
+  const club = nombreSede ? `FA CUP Chile ${nombreSede}` : "FA CUP Chile";
+  const asunto = `Inscripción de tu hijo/a en ${club}`;
+  const texto =
+    `Hola, te escribimos de ${club}.\n\n` +
+    `Para registrar la asistencia de tu hijo/a${categoria ? ` (${categoria})` : ""} con reconocimiento facial, ` +
+    `necesitamos que completes su inscripción: unos datos y 2 o 3 fotos de su cara. Son 2 minutos desde el celular:\n\n` +
+    `${url}\n\n` +
+    `El enlace vale hasta el ${fechaLarga(expira)}. Si tienes más de un hijo/a en el club, puedes inscribirlos a todos con este mismo enlace.\n\n` +
+    `¡Gracias!`;
+  return { asunto, texto };
+}
+
+/** QR grande + enlace + WhatsApp / Correo / Copiar / Compartir / Pantalla completa. */
+export function PanelQr({ url, expira, titulo = "Formulario de inscripción", categoria }: { url: string; expira: string; titulo?: string; categoria?: string | null }) {
   const notificar = useToast();
-  const [copiado, setCopiado] = useState(false);
+  const [copiado, setCopiado] = useState<"mensaje" | "enlace" | null>(null);
   const [completa, setCompleta] = useState(false);
   const puedeCompartir = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const sede = useSyncExternalStore(sinSuscripcion, nombreSedeGuardado, sinNombre);
+  const { asunto, texto } = mensajeInvitacion(url, expira, sede, categoria);
+  const whatsapp = `https://wa.me/?text=${encodeURIComponent(texto)}`;
+  const correo = `mailto:?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(texto)}`;
 
-  async function alCopiar() {
-    if (await copiar(url)) {
-      setCopiado(true);
-      notificar("Enlace copiado");
-      setTimeout(() => setCopiado(false), 2500);
+  async function alCopiar(que: "mensaje" | "enlace") {
+    if (await copiar(que === "mensaje" ? texto : url)) {
+      setCopiado(que);
+      notificar(que === "mensaje" ? "Mensaje con el enlace copiado" : "Enlace copiado");
+      setTimeout(() => setCopiado(null), 2500);
     } else {
       notificar("No se pudo copiar. Selecciona el enlace y cópialo a mano.", "err");
     }
   }
   async function alCompartir() {
     try {
-      await navigator.share({ title: "Inscripción FA CUP Chile", text: "Inscripción de tu hijo/a en FA CUP Chile:", url });
+      await navigator.share({ title: asunto, text: texto.replace(`${url}\n\n`, ""), url });
     } catch {
       /* el usuario canceló */
     }
@@ -90,18 +118,29 @@ export function PanelQr({ url, expira, titulo = "Formulario de inscripción" }: 
           aria-label="Enlace de inscripción"
           onFocus={(e) => e.currentTarget.select()}
         />
-        <small className="muted">Vale hasta el {fechaHora(expira)}. Solo sirve para esta sede.</small>
-        <div className="s-row" style={{ flexWrap: "wrap" }}>
-          <Button variante="primary" onClick={alCopiar}>
-            {copiado ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />} {copiado ? "Copiado" : "Copiar"}
+        <small className="muted">Vale hasta el {fechaHora(expira)}. Solo sirve para esta sede y lo pueden usar todas las familias que lo reciban.</small>
+        <div className="s-row" role="group" aria-label="Enviar el enlace" style={{ flexWrap: "wrap" }}>
+          <a className="s-btn primary" style={{ textDecoration: "none" }} href={whatsapp} target="_blank" rel="noopener noreferrer">
+            <MessageCircle size={15} aria-hidden /> WhatsApp
+          </a>
+          <a className="s-btn" style={{ textDecoration: "none" }} href={correo}>
+            <Mail size={15} aria-hidden /> Correo
+          </a>
+          <Button onClick={() => alCopiar("mensaje")} title="Copia el mensaje con el enlace para pegarlo donde quieras">
+            {copiado === "mensaje" ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />} {copiado === "mensaje" ? "Copiado" : "Copiar"}
           </Button>
           {puedeCompartir && (
             <Button onClick={alCompartir}>
               <Share2 size={15} aria-hidden /> Compartir
             </Button>
           )}
-          <Button onClick={() => setCompleta(true)}>
-            <Expand size={15} aria-hidden /> Mostrar al apoderado
+        </div>
+        <div className="s-row" style={{ flexWrap: "wrap" }}>
+          <Button sm variante="ghost" onClick={() => alCopiar("enlace")}>
+            {copiado === "enlace" ? <Check size={14} aria-hidden /> : <Link2 size={14} aria-hidden />} {copiado === "enlace" ? "Enlace copiado" : "Copiar solo el enlace"}
+          </Button>
+          <Button sm variante="ghost" onClick={() => setCompleta(true)}>
+            <Expand size={14} aria-hidden /> Mostrar el QR al apoderado
           </Button>
         </div>
       </div>

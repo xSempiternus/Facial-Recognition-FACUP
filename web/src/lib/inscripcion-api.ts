@@ -8,8 +8,36 @@ export type InfoInscripcion = {
   categoria_fija: string | null;
   expira: string;
   consentimiento: { version: string; texto: string };
+  /** Autorización de comunicaciones (separada y opcional). Ausente en un backend anterior. */
+  comunicaciones?: { version: string; texto: string };
+  parentescos?: string[];
   fotos: { minimo: number; maximo: number; max_mb: number };
 };
+
+export type Parentesco = "" | "madre" | "padre" | "otro";
+
+const EMAIL_RE = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$/;
+
+/** Correo en minúsculas o null (misma regla que el backend). */
+export function normalizarCorreo(v: string): string | null {
+  const c = v.trim();
+  return c.length <= 254 && EMAIL_RE.test(c) ? c.toLowerCase() : null;
+}
+
+/** Celular chileno -> "+569XXXXXXXX" o null. Acepta 9XXXXXXXX, 569XXXXXXXX, +56 9 XXXX XXXX (igual que el backend). */
+export function normalizarTelefono(v: string): string | null {
+  let t = v.replace(/[\s().-]/g, "");
+  if (t.startsWith("00")) t = t.slice(2);
+  t = t.replace(/^\++/, "");
+  if (t.length === 11 && t.startsWith("56")) t = t.slice(2);
+  return /^9\d{8}$/.test(t) ? `+56${t}` : null;
+}
+
+/** "+56912345678" -> "+56 9 1234 5678" (solo para mostrar). */
+export function telefonoLegible(t: string): string {
+  const m = /^\+56(9)(\d{4})(\d{4})$/.exec(t);
+  return m ? `+56 ${m[1]} ${m[2]} ${m[3]}` : t;
+}
 
 export class ErrorInscripcion extends Error {
   constructor(
@@ -65,7 +93,10 @@ export type DatosInscripcion = {
   anioNacimiento: string;
   categoria: string;
   tutorNombre: string;
-  tutorContacto: string;
+  tutorCorreo: string;
+  tutorTelefono: string;
+  tutorParentesco: Parentesco;
+  aceptaComunicaciones: boolean;
   fotos: Blob[];
 };
 
@@ -77,8 +108,11 @@ export async function enviarInscripcion(d: DatosInscripcion): Promise<string> {
   form.append("anio_nacimiento", d.anioNacimiento);
   if (d.categoria) form.append("categoria", d.categoria);
   form.append("tutor_nombre", d.tutorNombre);
-  form.append("tutor_contacto", d.tutorContacto);
+  form.append("tutor_correo", d.tutorCorreo);
+  form.append("tutor_telefono", d.tutorTelefono);
+  if (d.tutorParentesco) form.append("tutor_parentesco", d.tutorParentesco);
   form.append("consentimiento", "true");
+  if (d.aceptaComunicaciones) form.append("acepta_comunicaciones", "true");
   d.fotos.forEach((f, i) => form.append(`foto${i + 1}`, f, `foto${i + 1}.jpg`));
   const ctl = new AbortController();
   const id = setTimeout(() => ctl.abort(), 60_000);

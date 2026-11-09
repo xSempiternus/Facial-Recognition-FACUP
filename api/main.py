@@ -23,11 +23,14 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from api import auth, limites, nucleo, sombra
+from api.exportes import router as exportes_router
 from api.inscripcion import router as inscripcion_router
 from api.metricas import router as metricas_router
 from api.nucleo import (Sede, analizar as _analyze, error as _error, log, obtener_sede as _obtener_sede,
                         plantillas_sombra as _plantillas_sombra, precalentar_nombre, sede_publica, sede_staff)
 from api.revision import router as revision_router
+from api import seguimiento
+from api.seguimiento import router as seguimiento_router
 from api.voz import precalentar as precalentar_voz, router as voz_router
 from src import cv_engine, db_manager, reportes, sedes
 
@@ -71,6 +74,9 @@ async def _respaldo_diario():
                     await run_in_threadpool(base.purgar_solicitudes)
                     await run_in_threadpool(base.purgar_pendientes)
                     await run_in_threadpool(base.purgar_verificaciones)  # registro de puntajes: 90 días
+                    cargada = nucleo._sedes.get(info["slug"])
+                    if cargada is not None:  # alertas de faltas aunque nadie abra el panel (cierre de jornada)
+                        await run_in_threadpool(seguimiento.evaluar_alertas, cargada, True)
                     if not base.respaldo_de_hoy_existe():
                         await run_in_threadpool(base.crear_respaldo, "auto")
             except Exception as exc:  # un fallo de respaldo no debe tumbar la API
@@ -139,6 +145,8 @@ app.include_router(voz_router)
 app.include_router(inscripcion_router)
 app.include_router(revision_router)
 app.include_router(metricas_router)
+app.include_router(seguimiento_router)
+app.include_router(exportes_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -464,6 +472,8 @@ async def verify(request: Request, file: UploadFile = File(...), s: Sede = Depen
         "ya_registrado": registrado_a_las is not None,
         "registrado_a_las": registrado_a_las,
         "reporte": reporte,
+        # Booleano grueso (sin puntaje): aceptado cerca del umbral -> el staff lo verá en "Revisar" (franja del kiosko).
+        "revisar": bool(float(score) < seguimiento.limite_revision(s)),
     }
 
 
@@ -580,6 +590,7 @@ def marcar_jornada(fecha: str, tipo: str = Form(...), s: Sede = Depends(sede_sta
         s.db.set_tipo_jornada(_fecha(fecha, "fecha"), tipo)
     except ValueError as exc:
         _error(400, "tipo_invalido", str(exc))
+    seguimiento.evaluar_alertas(s, forzar=True)  # una jornada marcada cuenta para las faltas seguidas
     return {"status": "success", "fecha": fecha, "tipo": tipo}
 
 

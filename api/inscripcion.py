@@ -333,9 +333,12 @@ def aprobar_solicitud(solicitud_id: int, nombre: str = Form(""), categoria: str 
                                if m != sol["modelo"] for e in es]}
     s.db.auditar("aprobar_solicitud", f"solicitud #{solicitud_id} -> jugador #{jid}"
                  + (" (invitado convertido)" if invitado_id is not None else ""))
+    # Par cercano (similitud >= 0.30 con otro jugador): aviso al staff y el kiosko pedirá confirmación para ese par.
+    parecido = s.revisar_parecidos(jid)
     precalentar_nombre(nombre)
     return {"status": "success", "id": jid, "nombre": nombre, "categoria": cat, "fotos": len(sol["embeddings"]),
-            "invitado_convertido": invitado_id is not None}
+            "invitado_convertido": invitado_id is not None,
+            "parecido": parecido, "avisos": [parecido["mensaje"]] if parecido else []}
 
 
 @router.post("/solicitudes/{solicitud_id}/rechazar")

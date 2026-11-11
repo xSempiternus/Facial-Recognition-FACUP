@@ -54,6 +54,8 @@ try {
     }
     if (-not $url) { throw "No aparecio la URL del tunel. Revisa $log" }
 
+    # La API usa esta direccion para los enlaces/QR de apoderados (data\url_publica.txt).
+    [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot 'data\url_publica.txt'), $url, (New-Object System.Text.UTF8Encoding($false)))
     Set-Clipboard -Value $url
     Write-Host ''
     Write-Host '  ============================================================' -ForegroundColor Green
@@ -67,6 +69,7 @@ try {
     [void][Console]::ReadLine()
 }
 finally {
+    Remove-Item (Join-Path $PSScriptRoot 'data\url_publica.txt') -ErrorAction SilentlyContinue
     foreach ($h in $hijos) { if ($h -and -not $h.HasExited) { & taskkill /PID $h.Id /T /F *> $null } }
     [void][Win.Power]::SetThreadExecutionState([uint32]2147483648)
 }

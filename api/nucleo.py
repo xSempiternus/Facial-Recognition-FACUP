@@ -20,6 +20,7 @@ from PIL import Image
 from api import auth
 from api.voz import precalentar as precalentar_voz
 from src import cv_engine, db_manager, sedes
+from src import plantillas as pl
 
 log = logging.getLogger("uvicorn.error")
 
@@ -29,8 +30,8 @@ MAX_BYTES_IMAGEN = 2 * 1024 * 1024
 MAX_LADO_IMAGEN = 2000
 MAX_BYTES_IMAGEN_STAFF = 15 * 1024 * 1024
 MAX_LADO_IMAGEN_STAFF = 8000
-# Una corrección del staff solo se guarda como foto del jugador si se parece al menos
-# (umbral - MARGEN_CORRECCION) a sus fotos actuales: protege contra asignaciones equivocadas.
+# Sugerencias de pendientes rechazados: solo se sugiere un candidato con similitud >= umbral - MARGEN_CORRECCION.
+# (El APRENDIZAJE por corrección del staff ya no usa este margen: ver la regla estricta en src/plantillas.py.)
 MARGEN_CORRECCION = 0.25
 # Reporte "No soy yo": id de un solo uso que vive 2 minutos en memoria con la captura de ese /verify.
 REPORTE_TTL_S = 120
@@ -76,6 +77,7 @@ class Sede:
         # avisos ya resueltos {aviso: (t, "pendiente" | "descartado")} (idempotencia), viven AVISO_TTL_S
         self.avisos_usados: dict[str, tuple[float, str]] = {}
         self._matrices: dict[str, tuple] = {}  # caché de plantillas por modelo (ver matriz_plantillas)
+        self.pares: set[frozenset] = set()  # pares de jugadores parecidos entre sí (tabla pares_cercanos)
         self.lock = threading.RLock()
         self.db.init_db()
         self._sal = self.db.ip_sal().encode()
@@ -85,8 +87,51 @@ class Sede:
         nuevos = {j["id"]: {"nombre": j["nombre"], "categoria": j["categoria"],
                             "estado": j.get("estado") or "activo", "plantillas": j["plantillas"]}
                   for j in self.db.get_all_jugadores()}
+        pares = {frozenset((p["a"], p["b"])) for p in self.db.pares_cercanos()}
         with self.lock:
             self.jugadores = nuevos
+            self.pares = pares
+
+    def es_par_cercano(self, a: int | None, b: int | None) -> bool:
+        return a is not None and b is not None and frozenset((a, b)) in self.pares
+
+    def plantillas_por_jugador(self) -> dict[int, list]:
+        """{jugador_id: [Plantilla del modelo actual]} (con .origen) de los jugadores ACTIVOS con alguna foto."""
+        modelo = self.config["modelo"]
+        salida = {}
+        for jid, d in list(self.jugadores.items()):
+            if d["estado"] == "activo":
+                ps = [p for p in d["plantillas"] if p[0] == modelo]
+                if ps:
+                    salida[jid] = ps
+        return salida
+
+    def evaluar_correccion(self, jugador_id: int, embedding, parecido: str | None) -> tuple[bool, str, dict]:
+        """Regla estricta del aprendizaje por corrección (src/plantillas.evaluar_aprendizaje)."""
+        return pl.evaluar_aprendizaje(embedding, jugador_id, self.plantillas_por_jugador(), self.umbral_duda(),
+                                      cv_engine.MARGEN_MIN, parecido)
+
+    def revisar_parecidos(self, jugador_id: int) -> dict | None:
+        """Tras inscribir/aprobar: registra como par cercano a todo jugador cuya similitud con el nuevo (máximo
+        entre fotos de inscripción) sea >= umbral_duda - OFFSET_PAR_CERCANO (0.30 hoy) y retorna un aviso para el
+        staff con el más parecido (None si no hay). Un fallo aquí nunca rompe la inscripción."""
+        try:
+            umbral = pl.umbral_par_cercano(self.umbral_duda())
+            parecidos = pl.parecidos_a(jugador_id, self.plantillas_por_jugador(), umbral)
+            for otro, sim in parecidos:
+                self.db.registrar_par_cercano(jugador_id, otro, sim)
+            with self.lock:
+                self.pares |= {frozenset((jugador_id, otro)) for otro, _ in parecidos}
+        except Exception:
+            log.exception("[%s] no se pudieron revisar los parecidos del jugador %s", self.slug, jugador_id)
+            return None
+        if not parecidos:
+            return None
+        otro, sim = parecidos[0]
+        nombre = self.jugadores.get(otro, {}).get("nombre", f"#{otro}")
+        return {"jugador_id": otro, "nombre": nombre, "similitud": round(sim, 4),
+                "mensaje": f"Se parece a {nombre} ({sim:.2f}): confírmalo en persona. Para este par el kiosko "
+                           f"pedirá confirmación siempre."}
 
     def umbral(self) -> float:
         """Umbral de parecido para comparaciones auxiliares (duplicados al inscribir, coherencia de fotos,
@@ -149,17 +194,21 @@ class Sede:
         cache = self._matrices.get(modelo)
         if cache is not None and cache[0] == huella:
             return cache[2], cache[3], cache[4]
-        claves, filas = [], []
+        claves, filas, pesos = [], [], []
         for jid, d in items:
             if d["estado"] != "activo":
                 continue
-            for m, e in d["plantillas"]:
-                if m == modelo:
+            for p in d["plantillas"]:
+                if p[0] == modelo:
                     claves.append(jid)
-                    filas.append(e)
+                    filas.append(p[1])
+                    pesos.append(pl.peso(p))
         if filas:
             mat = np.asarray(filas, dtype=np.float32)
-            normas = np.linalg.norm(mat, axis=1)
+            # Puntuación robusta (src/plantillas.py): las plantillas aprendidas por corrección valen x PESO_APRENDIDA.
+            # Se aplica dividiendo su norma por el peso: (mat @ t) / (norma/peso * |t|) = peso * coseno, así todos
+            # los consumidores (dos_mejores, mejor_candidato, puntajes_por_jugador) usan el mismo puntaje.
+            normas = np.linalg.norm(mat, axis=1) / np.asarray(pesos, dtype=np.float32)
         else:
             mat = normas = None
         if len(self._matrices) > 4 and modelo not in self._matrices:  # cambios de modelo: no acumular cachés
@@ -168,7 +217,7 @@ class Sede:
         return claves, mat, normas
 
     def puntajes_por_jugador(self, embedding, modelo: str | None = None) -> dict[int, float]:
-        """{jugador_id: mejor similitud entre sus plantillas de `modelo`} (solo activos con plantilla de ese modelo).
+        """{jugador_id: puntaje robusto (ver matriz_plantillas)} (solo activos con plantilla de ese modelo).
         Lo usa el modo sombra (ensemble y cara recortada en el celular); no participa del veredicto."""
         claves, mat, normas_m = self.matriz_plantillas(modelo)
         if mat is None or not claves:
@@ -207,12 +256,12 @@ class Sede:
     def agregar_plantilla(self, jugador_id: int, embedding: list[float], origen: str) -> None:
         modelo = self.config["modelo"]
         self.db.add_foto(jugador_id, embedding, modelo, origen)
+        # La BD pudo descartar fotos (MAX_FOTOS, o el tope de aprendidas): se relee para que la memoria coincida
+        # (lista nueva -> la huella de matriz_plantillas cambia y la caché se rehace).
+        nuevas = self.db.plantillas_de(jugador_id)
         with self.lock:
-            plantillas = self.jugadores[jugador_id]["plantillas"]
-            plantillas.append((modelo, embedding))
-            # Si se superó el límite, la BD descartó alguna foto: se relee para que la cache coincida.
-            if sum(1 for m, _ in plantillas if m == modelo) > db_manager.MAX_FOTOS:
-                self.jugadores[jugador_id]["plantillas"] = self.db.plantillas_de(jugador_id)
+            if jugador_id in self.jugadores:
+                self.jugadores[jugador_id]["plantillas"] = nuevas
 
     def best_match(self, embedding: list[float]):
         return self.buscar(embedding)

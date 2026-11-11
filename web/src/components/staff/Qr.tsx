@@ -3,11 +3,12 @@
 // QR generado en el navegador (librería local `qrcode`, sin servicios externos) + panel para compartir un enlace.
 
 import { Check, Copy, Expand, Link2, Mail, MessageCircle, Share2 } from "lucide-react";
+import Link from "next/link";
 import { create } from "qrcode";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { nombreSedeGuardado } from "@/lib/sede";
-import { fechaHora } from "@/lib/staff-api";
-import { Button, Dialogo, useToast } from "./ui";
+import { esUrlLocal, fechaHora } from "@/lib/staff-api";
+import { Alerta, Button, Dialogo, useToast } from "./ui";
 
 const MARGEN = 4; // módulos de zona de silencio (norma QR)
 
@@ -84,6 +85,8 @@ export function PanelQr({ url, expira, titulo = "Formulario de inscripción", ca
   const [completa, setCompleta] = useState(false);
   const puedeCompartir = typeof navigator !== "undefined" && typeof navigator.share === "function";
   const sede = useSyncExternalStore(sinSuscripcion, nombreSedeGuardado, sinNombre);
+  const local = esUrlLocal(url);
+  const motivoLocal = "Este enlace solo funciona en este equipo: configura una dirección pública.";
   const { asunto, texto } = mensajeInvitacion(url, expira, sede, categoria);
   const whatsapp = `https://wa.me/?text=${encodeURIComponent(texto)}`;
   const correo = `mailto:?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(texto)}`;
@@ -118,18 +121,37 @@ export function PanelQr({ url, expira, titulo = "Formulario de inscripción", ca
           aria-label="Enlace de inscripción"
           onFocus={(e) => e.currentTarget.select()}
         />
+        {local && (
+          <Alerta>
+            Este enlace solo funciona en este equipo. Para compartirlo con apoderados necesitas una dirección pública (https).{" "}
+            <Link className="s-btn sm" style={{ textDecoration: "none" }} href="/staff/ajustes">Configurar</Link>
+          </Alerta>
+        )}
         <small className="muted">Vale hasta el {fechaHora(expira)}. Solo sirve para esta sede y lo pueden usar todas las familias que lo reciban.</small>
         <div className="s-row" role="group" aria-label="Enviar el enlace" style={{ flexWrap: "wrap" }}>
-          <a className="s-btn primary" style={{ textDecoration: "none" }} href={whatsapp} target="_blank" rel="noopener noreferrer">
-            <MessageCircle size={15} aria-hidden /> WhatsApp
-          </a>
-          <a className="s-btn" style={{ textDecoration: "none" }} href={correo}>
-            <Mail size={15} aria-hidden /> Correo
-          </a>
+          {local ? (
+            <>
+              <Button disabled title={motivoLocal}>
+                <MessageCircle size={15} aria-hidden /> WhatsApp
+              </Button>
+              <Button disabled title={motivoLocal}>
+                <Mail size={15} aria-hidden /> Correo
+              </Button>
+            </>
+          ) : (
+            <>
+              <a className="s-btn primary" style={{ textDecoration: "none" }} href={whatsapp} target="_blank" rel="noopener noreferrer">
+                <MessageCircle size={15} aria-hidden /> WhatsApp
+              </a>
+              <a className="s-btn" style={{ textDecoration: "none" }} href={correo}>
+                <Mail size={15} aria-hidden /> Correo
+              </a>
+            </>
+          )}
           <Button onClick={() => alCopiar("mensaje")} title="Copia el mensaje con el enlace para pegarlo donde quieras">
             {copiado === "mensaje" ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />} {copiado === "mensaje" ? "Copiado" : "Copiar"}
           </Button>
-          {puedeCompartir && (
+          {puedeCompartir && !local && (
             <Button onClick={alCompartir}>
               <Share2 size={15} aria-hidden /> Compartir
             </Button>

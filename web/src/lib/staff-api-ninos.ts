@@ -1,6 +1,6 @@
 // Ayudas de la pantalla «Niños»: enlace de inscripción para apoderados (7 días por defecto) y estado simple de cada niño.
 
-import { api, urlEnlace, type Jugador } from "@/lib/staff-api";
+import { api, cargarPublica, reubicarEnlace, urlEnlace, type Jugador } from "@/lib/staff-api";
 
 export type EnlaceApoderado = { id: number; url: string; expira: string; categoria: string | null };
 
@@ -19,10 +19,11 @@ function leerMemoria(): Memoria {
 /** El token solo se conoce al crear el enlace: se recuerda (en esta pestaña) para reutilizarlo mientras siga activo. */
 export async function enlaceApoderado(categoria = "", dias = 7): Promise<EnlaceApoderado> {
   const clave = `${categoria}|${dias}`;
+  await cargarPublica();
   const previo = leerMemoria()[clave];
   if (previo) {
     const lista = await api.enlaces();
-    if (lista.some((x) => x.id === previo.id && x.estado === "activo")) return previo;
+    if (lista.some((x) => x.id === previo.id && x.estado === "activo")) return { ...previo, url: reubicarEnlace(previo.url) };
   }
   const r = await api.crearEnlace(categoria, dias);
   const nuevo = { id: r.id, url: urlEnlace(r.ruta), expira: r.expira, categoria: r.categoria };

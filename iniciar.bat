@@ -13,6 +13,9 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
 )
+REM Si hay cloudflared se abrira un tunel publico: la API debe confiar en la IP real que manda el proxy.
+where cloudflared >nul 2>nul
+if not errorlevel 1 set TRUST_PROXY=1
 start "API - Reconocimiento facial" cmd /k ".venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000"
 
 REM App web: instala dependencias la primera vez y compila (asi siempre corre la version al dia).
@@ -22,7 +25,11 @@ if errorlevel 1 (
     pause
     exit /b 0
 )
-start "Web - FA CUP" cmd /k "cd /d web && (if not exist node_modules call npm install) && call npm run build && call npm start -- -p 3000"
+start "Web - FA CUP" cmd /k "cd /d web && (if not exist node_modules call npm install) && call npm run build && call npm start -- -H 0.0.0.0 -p 3000"
 
 REM Cuando la app web responda, se abre en Edge (menu en la raiz) a pantalla completa (F11 para salir).
 start "" /min powershell -NoProfile -WindowStyle Hidden -Command "for($i=0;$i -lt 300;$i++){try{if((Invoke-WebRequest -UseBasicParsing http://localhost:3000 -TimeoutSec 3).StatusCode -eq 200){break}}catch{};Start-Sleep -Seconds 2}; try{Start-Process msedge -ArgumentList '--app=http://localhost:3000','--start-fullscreen' -ErrorAction Stop}catch{Start-Process 'http://localhost:3000'}"
+
+REM Tunel publico para los enlaces de apoderados (escribe data\url_publica.txt). Sin cloudflared solo avisa.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\tunel.ps1"
+timeout /t 10

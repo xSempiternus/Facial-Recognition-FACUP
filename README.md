@@ -115,11 +115,43 @@ referencia visual en la página **Guía de estilo**.
 
 ## Cómo mejora con el uso
 
-Cada niño puede tener hasta 10 fotos; al reconocer se compara contra todas y gana la más parecida.
-Cuando la cámara no reconoce a un niño, la llegada queda en **🔔 Por revisar** con una miniatura de la
-cara (solo en memoria, se borra a las 2 horas). Al indicar quién era, se registra su asistencia y esa foto
-se suma a las suyas, así la próxima vez lo reconoce. Si la foto se parece muy poco a las que ya tiene
-(¿mala luz o se eligió al niño equivocado?), se registra la asistencia pero **no** se usa para aprender.
+Cada niño puede tener hasta 10 fotos. Cuando la cámara no reconoce a un niño, la llegada queda en
+**🔔 Por revisar**. Al indicar quién era se registra su asistencia y, solo si es seguro, esa foto se suma a
+las suyas (aprendizaje por corrección, origen `correccion`). Reglas (`src/plantillas.py`):
+
+- **Se aprende solo si**: la foto se parece a sus fotos de **inscripción** ≥ umbral de duda (0.37 hoy), él es el
+  mejor candidato con margen ≥ 0.04 sobre el segundo, no es casi igual a una foto que ya tiene (coseno > 0.92) y
+  la llegada no fue un rechazo de baja calidad. Si no, se registra la asistencia pero **no** se aprende.
+- **Tope**: 4 fotos aprendidas por niño; la quinta reemplaza a la más antigua. Nunca se tocan las de inscripción
+  ni las «nueva foto» del staff.
+- **Puntaje**: el máximo sobre sus fotos de inscripción; las aprendidas cuentan ×0.9. Así un niño con muchas
+  fotos aprendidas no atrae a desconocidos («hub»); para los inscritos con 3 fotos el puntaje no cambia.
+- **Pares parecidos**: al inscribir o aprobar, si el niño se parece ≥ 0.30 (umbral de duda − 0.07) a otro
+  inscrito, el staff ve el aviso «Se parece a X (0.37): confírmalo en persona» y el par queda guardado
+  (`pares_cercanos`). Si el kiosko duda entre esos dos y la similitud no llega a umbral automático + 0.10, pasa
+  a revisión del staff (DUDOSO) en vez de marcar solo.
+
+Variables: `PESO_PLANTILLA_APRENDIDA` (0.9), `MAX_PLANTILLAS_APRENDIDAS` (4), `UMBRAL_CASI_DUPLICADO` (0.92),
+`OFFSET_PAR_CERCANO` (0.07), `MARGEN_PAR_CERCANO` (0.10), `MARGEN_MIN` (0.04).
+
+**Reparar plantillas aprendidas** (p. ej. si se asignaron llegadas al niño equivocado con la regla antigua):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\reparar_plantillas.py --sede las-condes            # solo informe (no cambia nada)
+.\.venv\Scripts\python.exe scripts\reparar_plantillas.py --sede las-condes --aplicar  # respalda y borra las dudosas
+```
+
+Borra solo fotos `correccion` que se parecen < umbral de duda a las de inscripción de su niño o más a otro niño;
+antes hace un respaldo en `data/sedes/<slug>/respaldos/`. **Reinicia la API después de `--aplicar`**: las
+plantillas viven en memoria y solo se recargan al arrancar.
+
+### Ajustar el umbral
+
+En **🛠️ Ajustes** (o `PUT /config`), `umbral` es el de aceptación automática y `umbral_duda` el de duda (entre ambos
+la llegada pasa al staff). Una config antigua con solo `"umbral": 0.37` se lee como duda 0.37 / automático 0.42.
+Con GhostFaceNet en las-condes (nov-2026) los genuinos puntuaron 0.49–0.71 y el falso positivo 0.4295:
+**recomendado umbral automático 0.45 con duda 0.37**. Sube de a 0.02 y mira en Métricas cuántas llegadas pasan
+a DUDOSO; si un niño queda siempre en duda, tómale 3 fotos nuevas de inscripción en vez de bajar el umbral.
 
 ## Evaluar qué modelo usar
 
@@ -156,8 +188,27 @@ valores por defecto < variables de entorno < config.json de la sede.
 | `AUTH_TTL_HORAS`  | `12`                    | Duración de la sesión del staff                    |
 | `CORS_ORIGINS`    | `http://localhost:3000` | Orígenes web permitidos (separados por coma)       |
 | `REQUIRE_CONSENT` | `1`                     | Exigir autorización del tutor para inscribir       |
+| `PUBLIC_URL`      | —                       | Dirección pública https para los enlaces de apoderados (ver «Compartir enlaces con apoderados») |
 | `DATA_DIR`        | `data/`                 | Carpeta de datos (control.db, sedes/, voz/). Útil para pruebas con una copia |
 | `DEFAULT_SEDE`    | `las-condes`            | Sede usada cuando el login o un endpoint público no indican sede |
+
+## Compartir enlaces con apoderados
+
+Los enlaces y QR de inscripción deben abrirse desde el celular del apoderado. `http://localhost:3000` solo existe en el
+computador del club, así que un QR con esa dirección no funciona en otro teléfono. Además, la cámara del formulario
+exige **HTTPS** (los navegadores móviles la bloquean en http).
+
+La app usa la primera de estas direcciones públicas que exista:
+
+1. **Ajustes → Dirección pública** (la guarda el staff; vale para toda la instalación). Vacío = quitar el ajuste.
+2. Variable de entorno `PUBLIC_URL` (ej. `https://inscripcion.miclub.cl`).
+3. `data/url_publica.txt`: lo escribe `iniciar.bat` (y `iniciar-demo.bat`) cuando abre el túnel de Cloudflare. Requiere
+   `cloudflared` instalado (`winget install Cloudflare.cloudflared`); la dirección `*.trycloudflare.com` cambia en cada arranque.
+
+Si el panel se abre desde un dominio público https, se usa ese mismo dominio. Si no hay ninguna dirección y el panel está en
+localhost, el QR muestra un aviso y WhatsApp/correo quedan desactivados. Para una dirección fija usa un dominio propio
+(túnel con nombre de Cloudflare o hosting) y guárdalo en Ajustes. Con túnel activo, `iniciar.bat` define `TRUST_PROXY=1` y
+sirve la web en `0.0.0.0`.
 
 ## Multi-sede
 

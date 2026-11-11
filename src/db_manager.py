@@ -13,6 +13,7 @@ from pathlib import Path
 
 from src.db_alertas import AlertasDB, crear_esquema as _crear_esquema_alertas
 from src.db_flujos import FlujosDB, crear_esquema as _crear_esquema_flujos
+from src.plantillas import MAX_APRENDIDAS, ORIGENES_APRENDIDOS, Plantilla
 
 # Columnas agregadas después de la primera versión: se crean si faltan en una BD existente.
 # jugadores.estado: 'activo' | 'invitado' (sin biometría). asistencia.estado: 'valida' | 'disputada' | 'anulada'.
@@ -165,6 +166,19 @@ class Base(FlujosDB, AlertasDB):
             )
             _crear_esquema_flujos(conn)
             _crear_esquema_alertas(conn)
+            # Pares de jugadores que se parecen entre sí (ver src/plantillas.py): en /verify, si el mejor y el segundo
+            # candidato son un par cercano y el puntaje no tiene holgura, el veredicto es DUDOSO. a < b.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pares_cercanos (
+                    a INTEGER NOT NULL REFERENCES jugadores(id) ON DELETE CASCADE,
+                    b INTEGER NOT NULL REFERENCES jugadores(id) ON DELETE CASCADE,
+                    similitud REAL,
+                    creado_en DATETIME,
+                    PRIMARY KEY (a, b)
+                )
+                """
+            )
             # Siembra y migración de categorías: Sub-10 + toda categoría de texto libre ya usada por un jugador.
             conn.execute("UPDATE jugadores SET categoria = NULL WHERE trim(coalesce(categoria, '')) = ''")
             if conn.execute("SELECT COUNT(*) FROM categorias").fetchone()[0] == 0:
@@ -261,22 +275,33 @@ class Base(FlujosDB, AlertasDB):
             return jugador_id
 
     def add_foto(self, jugador_id: int, embedding: list[float], modelo: str, origen: str) -> None:
-        """Agrega una foto a un jugador (p. ej. una corrección del staff), respetando MAX_FOTOS."""
+        """Agrega una foto a un jugador (p. ej. una corrección del staff), respetando MAX_FOTOS y, para las
+        aprendidas ('correccion'), el tope MAX_APRENDIDAS: se reemplaza la aprendida más antigua (nunca una BASE)."""
         with self.conexion() as conn:
             conn.execute(
                 "INSERT INTO fotos (jugador_id, embedding, modelo, origen, creado_en) VALUES (?, ?, ?, ?, ?)",
                 (jugador_id, json.dumps(embedding), modelo, origen, _now()),
             )
+            if origen in ORIGENES_APRENDIDOS:
+                marcas = ",".join("?" * len(ORIGENES_APRENDIDOS))
+                sobra = conn.execute(
+                    f"SELECT COUNT(*) FROM fotos WHERE jugador_id = ? AND modelo = ? AND origen IN ({marcas})",
+                    (jugador_id, modelo, *ORIGENES_APRENDIDOS)).fetchone()[0] - MAX_APRENDIDAS
+                if sobra > 0:
+                    conn.execute(
+                        f"DELETE FROM fotos WHERE id IN (SELECT id FROM fotos WHERE jugador_id = ? AND modelo = ? "
+                        f"AND origen IN ({marcas}) ORDER BY creado_en, id LIMIT ?)",
+                        (jugador_id, modelo, *ORIGENES_APRENDIDOS, sobra))
             exceso = conn.execute(
                 "SELECT COUNT(*) FROM fotos WHERE jugador_id = ? AND modelo = ?", (jugador_id, modelo)
             ).fetchone()[0] - MAX_FOTOS
             if exceso > 0:
-                # Primero se descartan las más antiguas que no son de inscripción.
+                # Primero se descartan las aprendidas más antiguas, luego las 'nueva_foto'; la inscripción al final.
                 conn.execute(
                     """
                     DELETE FROM fotos WHERE id IN (
                         SELECT id FROM fotos WHERE jugador_id = ? AND modelo = ?
-                        ORDER BY (origen = 'inscripcion'), creado_en, id LIMIT ?
+                        ORDER BY (origen = 'inscripcion'), (origen = 'nueva_foto'), creado_en, id LIMIT ?
                     )
                     """,
                     (jugador_id, modelo, exceso),
@@ -286,10 +311,11 @@ class Base(FlujosDB, AlertasDB):
         """Retorna [{'id', 'nombre', 'categoria', 'estado', 'embedding', 'plantillas': [(modelo, embedding)]}, ...]."""
         with self.conexion() as conn:
             jugadores = conn.execute("SELECT id, nombre, categoria, modelo, estado, embedding FROM jugadores").fetchall()
-            fotos = conn.execute("SELECT jugador_id, modelo, embedding FROM fotos ORDER BY id").fetchall()
+            fotos = conn.execute("SELECT jugador_id, modelo, embedding, origen FROM fotos ORDER BY id").fetchall()
         plantillas: dict[int, list] = {}
-        for f in fotos:
-            plantillas.setdefault(f["jugador_id"], []).append((f["modelo"], json.loads(f["embedding"])))
+        for f in fotos:  # Plantilla: tupla (modelo, embedding) con .origen (ver src/plantillas.py)
+            plantillas.setdefault(f["jugador_id"], []).append(
+                Plantilla(f["modelo"], json.loads(f["embedding"]), f["origen"]))
         return [
             {**dict(j), "embedding": json.loads(j["embedding"]), "plantillas": plantillas.get(j["id"], [])}
             for j in jugadores
@@ -297,9 +323,51 @@ class Base(FlujosDB, AlertasDB):
 
     def plantillas_de(self, jugador_id: int) -> list:
         with self.conexion() as conn:
-            fotos = conn.execute("SELECT modelo, embedding FROM fotos WHERE jugador_id = ? ORDER BY id",
+            fotos = conn.execute("SELECT modelo, embedding, origen FROM fotos WHERE jugador_id = ? ORDER BY id",
                                  (jugador_id,)).fetchall()
-        return [(f["modelo"], json.loads(f["embedding"])) for f in fotos]
+        return [Plantilla(f["modelo"], json.loads(f["embedding"]), f["origen"]) for f in fotos]
+
+    def fotos_detalle(self, modelo: str | None = None) -> list[dict]:
+        """[{id, jugador_id, modelo, origen, creado_en, embedding}] de jugadores ACTIVOS (para reparar_plantillas)."""
+        with self.conexion() as conn:
+            filas = conn.execute(
+                "SELECT f.id, f.jugador_id, f.modelo, f.origen, f.creado_en, f.embedding FROM fotos f "
+                "JOIN jugadores j ON j.id = f.jugador_id WHERE coalesce(j.estado, 'activo') = 'activo' "
+                + ("AND f.modelo = ? " if modelo else "") + "ORDER BY f.jugador_id, f.id",
+                (modelo,) if modelo else ()).fetchall()
+        return [{**dict(f), "embedding": json.loads(f["embedding"])} for f in filas]
+
+    def borrar_fotos_aprendidas(self, ids: list[int]) -> int:
+        """Borra fotos por id, SOLO si son aprendidas ('correccion'): nunca inscripción ni nueva_foto."""
+        if not ids:
+            return 0
+        marcas = ",".join("?" * len(ORIGENES_APRENDIDOS))
+        with self.conexion() as conn:
+            n = conn.execute(
+                f"DELETE FROM fotos WHERE id IN ({','.join('?' * len(ids))}) AND origen IN ({marcas})",
+                (*ids, *ORIGENES_APRENDIDOS)).rowcount
+        self.limpiar_wal()
+        return n
+
+    # ------------------------------------------------------------ pares cercanos
+
+    def registrar_par_cercano(self, a: int, b: int, similitud: float) -> None:
+        a, b = min(a, b), max(a, b)
+        if a == b:
+            return
+        with self.conexion() as conn:
+            conn.execute(
+                "INSERT INTO pares_cercanos (a, b, similitud, creado_en) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(a, b) DO UPDATE SET similitud = excluded.similitud",
+                (a, b, round(float(similitud), 4), _now()))
+
+    def pares_cercanos(self) -> list[dict]:
+        """[{a, b, similitud}]. Base sin la tabla (versión anterior): lista vacía."""
+        try:
+            with self.conexion() as conn:
+                return [dict(r) for r in conn.execute("SELECT a, b, similitud FROM pares_cercanos ORDER BY a, b")]
+        except sqlite3.OperationalError:
+            return []
 
     def list_jugadores(self, modelo: str | None = None) -> list[dict]:
         """Listado para el staff (sin embeddings), con total de asistencias y fotos del modelo dado."""

@@ -24,8 +24,9 @@ from fastapi import APIRouter, Depends, Form, Query, Request
 
 from api import limites
 from api.auth import _cliente
-from api.nucleo import MARGEN_CORRECCION, Sede, error, precalentar_nombre, sede_publica, sede_staff
-from src import cv_engine, db_manager
+from api.nucleo import Sede, error, precalentar_nombre, sede_publica, sede_staff
+from src import db_manager
+from src import plantillas as pl
 from src.db_flujos import _SIN_CAMBIO
 
 router = APIRouter()
@@ -138,14 +139,14 @@ def asignar_pendiente(pendiente_id: int, jugador_id: int = Form(...), s: Sede = 
     elif d["modelo"] != s.config["modelo"]:
         motivo = "La foto se tomó con otro modelo."
     else:
-        propias = s.plantillas_actuales().get(jugador_id, [])
-        parecido = max((cv_engine.cosine_similarity(d["embedding"], e) for e in propias), default=None)
-        if parecido is None or parecido >= s.umbral() - MARGEN_CORRECCION:
+        # Regla estricta (src/plantillas.py): parecida a sus fotos de INSCRIPCIÓN (>= umbral de duda), él es el mejor
+        # candidato con margen, no es casi un duplicado y no venía de un rechazado de baja calidad. Tope de 4.
+        aprender, cod, _ = s.evaluar_correccion(jugador_id, d["embedding"], d.get("parecido"))
+        if aprender:
             s.agregar_plantilla(jugador_id, d["embedding"], "correccion")
             foto_guardada = True
         else:
-            motivo = ("La foto se parece poco a las que ya tiene (¿mala luz, o era otro niño?), "
-                      "así que no se usó para aprender.")
+            motivo = pl.MOTIVOS_APRENDIZAJE.get(cod, "La foto no se usó para aprender.")
     disputa = _resolver_disputa(s, d, jugador_id)
     try:  # dato de corrección para el modo sombra: a quién asignó el staff la captura de esa verificación
         s.db.marcar_staff_verificacion(d.get("verificacion_id"), jugador_id)

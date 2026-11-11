@@ -4,7 +4,7 @@
 
 import { Link2, QrCode, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { ApiError, api, fechaHora, textoError, urlEnlace, type Enlace } from "@/lib/staff-api";
+import { ApiError, api, cargarPublica, fechaHora, reubicarEnlace, textoError, urlEnlace, type Enlace } from "@/lib/staff-api";
 import { PanelQr } from "./Qr";
 import { Alerta, Badge, Button, Campo, Dialogo, Segmentado, SkeletonRows, Vacio, useQuery, useToast } from "./ui";
 
@@ -33,6 +33,7 @@ function recordar(categoria: string, e: EnlaceVivo) {
 
 /** Crea un enlace nuevo y lo recuerda. */
 export async function crearEnlaceVivo(categoria: string, dias: number): Promise<EnlaceVivo> {
+  await cargarPublica();
   const r = await api.crearEnlace(categoria, dias);
   const e = { id: r.id, url: urlEnlace(r.ruta), expira: r.expira, categoria: r.categoria };
   if (dias === 1) recordar(categoria, e);
@@ -41,10 +42,11 @@ export async function crearEnlaceVivo(categoria: string, dias: number): Promise<
 
 /** Enlace de 1 día para la categoría: reutiliza el recordado si sigue activo en el servidor; si no, crea uno. */
 export async function enlaceRapido(categoria: string): Promise<EnlaceVivo> {
+  await cargarPublica();
   const previo = recordado(categoria);
   if (previo) {
     const lista = await api.enlaces();
-    if (lista.some((x) => x.id === previo.id && x.estado === "activo")) return previo;
+    if (lista.some((x) => x.id === previo.id && x.estado === "activo")) return { ...previo, url: reubicarEnlace(previo.url) };
   }
   return crearEnlaceVivo(categoria, 1);
 }

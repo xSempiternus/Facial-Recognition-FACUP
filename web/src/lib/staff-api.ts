@@ -353,6 +353,8 @@ export const api = {
     }),
   rechazarSolicitud: (id: number, motivo: string) =>
     json<unknown>(`/solicitudes/${id}/rechazar`, { method: "POST", body: form({ motivo }) }),
+  publica: () => json<Publica>("/config/publica"),
+  guardarPublica: (url: string) => json<Publica>("/config/publica", { method: "PUT", body: JSON.stringify({ url }), headers: { "Content-Type": "application/json" } }),
   enlaces: () => json<Enlace[]>("/inscripcion/enlaces"),
   crearEnlace: (categoria: string, dias: number) =>
     json<EnlaceNuevo>("/inscripcion/enlaces", { method: "POST", body: form({ categoria, dias }) }),
@@ -493,8 +495,79 @@ export const diaMes = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 export const hora = (ts: string) => ts.slice(11, 16);
 export const fechaHora = (ts: string) => `${diaMes(ts.slice(0, 10))} ${hora(ts)}`;
 
-/** URL absoluta de un enlace de inscripción (la ruta viene del backend, el origen del navegador). */
-export const urlEnlace = (ruta: string) => `${window.location.origin}${ruta}`;
+/** Dirección pública de la app (para enlaces a apoderados): ajuste del staff > PUBLIC_URL > archivo del lanzador. */
+export type Publica = { url: string | null; origen: "ajuste" | "env" | "archivo" | null };
+
+/** ¿El host es solo de este equipo o de la red local (inaccesible desde el celular de un apoderado)? */
+export function esHostLocal(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "::1" || h.endsWith(".local") || h.endsWith(".localhost")) return true;
+  const m = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(h);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254);
+}
+
+export function esUrlLocal(url: string): boolean {
+  try {
+    return esHostLocal(new URL(url).hostname);
+  } catch {
+    return true;
+  }
+}
+
+let publica: Publica | null = null;
+let publicaPendiente: Promise<Publica> | null = null;
+const oyentesPublica = new Set<() => void>();
+
+/** Carga la dirección pública una sola vez (se reutiliza); `forzar` la vuelve a pedir. Nunca lanza. */
+export function cargarPublica(forzar = false): Promise<Publica> {
+  if (publica && !forzar) return Promise.resolve(publica);
+  if (!publicaPendiente || forzar) {
+    publicaPendiente = json<Publica>("/config/publica")
+      .catch((): Publica => ({ url: null, origen: null }))
+      .then((p) => {
+        publica = p;
+        publicaPendiente = null;
+        oyentesPublica.forEach((f) => f());
+        return p;
+      });
+  }
+  return publicaPendiente;
+}
+
+/** Actualiza la copia en memoria (tras guardar en Ajustes). */
+export function fijarPublica(p: Publica) {
+  publica = p;
+  oyentesPublica.forEach((f) => f());
+}
+
+export const publicaActual = () => publica;
+export function suscribirPublica(cb: () => void) {
+  oyentesPublica.add(cb);
+  return () => oyentesPublica.delete(cb);
+}
+
+/** Origen para los enlaces: el ajuste explícito manda; si la página ya es pública se usa; si es local, la dirección pública. */
+export function origenEnlaces(p: Publica | null = publica): string {
+  const aqui = window.location.origin;
+  if (p?.origen === "ajuste" && p.url) return p.url;
+  if (!esHostLocal(window.location.hostname)) return aqui;
+  return p?.url ?? aqui;
+}
+
+/** URL absoluta de un enlace de inscripción (la ruta viene del backend). Usa `await cargarPublica()` antes. */
+export const urlEnlace = (ruta: string) => `${origenEnlaces()}${ruta}`;
+
+/** Recalcula el origen de un enlace ya creado (por si la dirección pública cambió desde que se recordó). */
+export function reubicarEnlace(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${origenEnlaces()}${u.pathname}${u.search}`;
+  } catch {
+    return url;
+  }
+}
 
 // Aviso entre páginas y el menú: cantidad de solicitudes pendientes (para el globo del menú).
 const EVENTO_SOL = "facup-solicitudes";

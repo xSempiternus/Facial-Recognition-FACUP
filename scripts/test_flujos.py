@@ -96,7 +96,7 @@ class Servidor:
         self.proc = None
         self.env = {**os.environ, "DATA_DIR": str(data_dir), "DEFAULT_SEDE": "sede-a", "STAFF_PIN": PIN_A,
                     "AUTH_SECRET": "secreto-de-prueba-flujos", "TRUST_PROXY": "0", "PYTHONIOENCODING": "utf-8",
-                    "TF_CPP_MIN_LOG_LEVEL": "3", "GEMINI_API_KEY": "", "AVISO_TTL_S": str(AVISO_TTL_S), **LIMITES}
+                    "TF_CPP_MIN_LOG_LEVEL": "3", "GEMINI_API_KEY": "", "AVISO_TTL_S": str(AVISO_TTL_S), "PUBLIC_URL": "", **LIMITES}
 
     def iniciar(self, timeout=420):
         self.fh = open(self.log, "ab")
@@ -658,6 +658,7 @@ def ejecutar(c: Cliente, srv: Servidor, F: dict[str, bytes]):
 
     pruebas_metricas(c, srv, tb)
     pruebas_umbrales(c, srv, F, ta, tb)
+    pruebas_publica(c, srv, ta)
     pruebas_inscripcion(c, srv, F)
 
 
@@ -1324,6 +1325,31 @@ def pruebas_exportes(c: Cliente, srv: Servidor, tm: str, f, hoy):
     check(st == 200 and any(a["accion"] == "exportar_asistencia" for a in aud), "exportes: queda en auditoría")
 
 
+def pruebas_publica(c: Cliente, srv: Servidor, ta: str):
+    print("\n== Dirección pública (ajuste > env > archivo)")
+    st, b = c.req("GET", "/config/publica")
+    check(st == 401, "GET /config/publica sin token -> 401", (st, b))
+    st, b = c.req("GET", "/config/publica", token=ta)
+    check(st == 200 and b == {"url": None, "origen": None}, "sin fuentes -> null", (st, b))
+    archivo = srv.data_dir / "url_publica.txt"
+    archivo.write_text("https://demo-uno.trycloudflare.com\n", encoding="utf-8")
+    st, b = c.req("GET", "/config/publica", token=ta)
+    check(b == {"url": "https://demo-uno.trycloudflare.com", "origen": "archivo"}, "archivo url_publica.txt", b)
+    st, b = c.req("PUT", "/config/publica", token=ta, json={"url": " https://Club.Example.cl/ "})
+    check(st == 200 and b == {"url": "https://club.example.cl", "origen": "ajuste"}, "ajuste gana y se normaliza", (st, b))
+    for malo in ("club.example.cl", "http://club.example.cl", "https://u:p@club.example.cl", "https://club.example.cl/ruta",
+                 "ftp://club.example.cl", "https://club.example.cl?x=1"):
+        st, b = c.req("PUT", "/config/publica", token=ta, json={"url": malo})
+        check(st == 400 and codigo(b) == "url_invalida", f"rechaza {malo}", (st, b))
+    st, b = c.req("PUT", "/config/publica", token=ta, json={"url": "http://localhost:3000"})
+    check(st == 200 and b["url"] == "http://localhost:3000", "acepta http://localhost:3000", (st, b))
+    st, b = c.req("PUT", "/config/publica", token=ta, json={"url": ""})
+    check(b == {"url": "https://demo-uno.trycloudflare.com", "origen": "archivo"}, "vacío quita el ajuste", b)
+    archivo.unlink()
+    st, b = c.req("GET", "/config/publica", token=ta)
+    check(b == {"url": None, "origen": None}, "de nuevo sin fuentes", b)
+
+
 def pruebas_inscripcion(c: Cliente, srv: Servidor, F: dict[str, bytes]):
     """Datos del apoderado (correo + celular chileno + parentesco), autorización de comunicaciones separada,
     enlace sin categoría (pendiente hasta aprobar), enlace multiuso con tope y compatibilidad con tutor_contacto.
@@ -1446,6 +1472,170 @@ def pruebas_inscripcion(c: Cliente, srv: Servidor, F: dict[str, bytes]):
           "migración: tutor_contacto viejo -> correo o teléfono si calza", filas)
 
 
+def pruebas_plantillas(tmp: Path):
+    """Plantillas (sin servidor ni fotos de personas): embeddings sintéticos con cosenos EXACTOS (base ortonormal),
+    Sede real sobre un DATA_DIR temporal propio. Regla estricta del aprendizaje por corrección, tope de aprendidas,
+    efecto hub mitigado, par cercano -> DUDOSO, y scripts/reparar_plantillas.py en dry-run y --aplicar."""
+    import numpy as np
+    print("\n== Plantillas: aprendizaje estricto, tope, hub, pares cercanos, reparar_plantillas")
+    data = tmp / "data_plantillas"
+    os.environ["DATA_DIR"] = str(data)  # antes de importar src.sedes (este proceso no lo había importado)
+    sys.path.insert(0, str(ROOT))
+    from src import sedes as _sedes
+    if Path(_sedes.DATA_DIR) != data.resolve():
+        check(False, "plantillas: DATA_DIR temporal (src.sedes ya estaba importado)", _sedes.DATA_DIR)
+        return
+    from src import cv_engine, plantillas as pl
+    from api import nucleo, revision
+
+    D, MOD = 512, "GhostFaceNet"
+    Q = np.linalg.qr(np.random.default_rng(7).standard_normal((D, 200)))[0]
+    cols = iter(range(200))
+
+    def u():
+        return Q[:, next(cols)].copy()
+
+    def mezcla(*pares):
+        """Vector unitario con coseno EXACTO c contra cada vector unitario v (los v ortogonales entre sí)."""
+        v = sum(c * x for c, x in pares) if pares else np.zeros(D)
+        return list(map(float, v + np.sqrt(max(0.0, 1 - sum(c * c for c, _ in pares))) * u()))
+
+    def sede(slug):
+        carpeta = data / "sedes" / slug
+        carpeta.mkdir(parents=True, exist_ok=True)
+        (carpeta / "config.json").write_text(json.dumps({"modelo": MOD, "detector": "retinaface", "umbral": 0.42,
+                                                        "umbral_duda": 0.37}), encoding="utf-8")
+        return nucleo.Sede(slug, slug)
+
+    def inscribir(s, nombre, vec, n=3):
+        jid = s.db.insert_jugador(nombre, list(vec), None, MOD, fotos_extra=[list(vec)] * (n - 1))
+        s.recargar()
+        return jid
+
+    # -- hub mitigado / bien inscritos sin cambios
+    s = sede("sede-hub")
+    uh, un = u(), u()
+    h = inscribir(s, "Hub", uh, n=1)
+    n = inscribir(s, "Nicolas", un)
+    ajenas = [u() for _ in range(4)]  # caras de OTRAS personas mal asignadas al hub (regla antigua)
+    for e in ajenas:
+        s.db.add_foto(h, list(map(float, e)), MOD, "correccion")
+    s.recargar()
+    sonda = mezcla((0.43, ajenas[0]))  # desconocido que se parece a una plantilla aprendida del hub
+    mid, sc, sid, s2 = s.dos_mejores(sonda)
+    viejo = max(cv_engine.cosine_similarity(sonda, e) for _, e in s.jugadores[h]["plantillas"])
+    check(abs(viejo - 0.43) < 1e-4 and cv_engine.decidir(viejo, s2, 0.42, 0.37) == "aceptado"
+          and mid == h and abs(sc - 0.9 * 0.43) < 1e-4 and cv_engine.decidir(sc, s2, 0.42, 0.37) == "dudoso",
+          "hub: aprendida x0.9 -> 0.43 pasa a 0.387 (antes ACEPTADO, ahora DUDOSO)", (viejo, mid, sc, s2))
+    sonda = mezcla((0.709, un))
+    mid, sc, _, s2 = s.dos_mejores(sonda)
+    check(mid == n and abs(sc - 0.709) < 1e-4 and cv_engine.decidir(sc, s2, 0.42, 0.37) == "aceptado",
+          "bien inscrito (solo inscripción): puntaje idéntico al de siempre (0.709) y ACEPTADO", (mid, sc))
+    sonda = mezcla((0.60, uh))
+    mid, sc, _, _ = s.dos_mejores(sonda)
+    check(mid == h and abs(sc - 0.60) < 1e-4, "hub contra su foto base: sin castigo (0.60)", (mid, sc))
+    check(abs(s.puntajes_por_jugador(mezcla((0.5, ajenas[1]))).get(h, 0) - 0.45) < 1e-4,
+          "puntajes_por_jugador usa el mismo puntaje robusto")
+
+    # -- regla estricta del aprendizaje (por la ruta real de asignación)
+    s = sede("sede-apr")
+    ua, ub = u(), u()
+    a = inscribir(s, "Ana", ua)
+    b = inscribir(s, "Bea", ub)
+
+    def asignar(emb, jid, parecido="medio"):
+        pid = s.db.crear_pendiente(nucleo.ahora_ts(), emb, MOD, b"", jid, 0.5, "no_reconocido", None, None,
+                                   parecido, None)
+        return revision.asignar_pendiente(pid, jugador_id=jid, s=s)
+
+    def n_corr(jid):
+        return sum(1 for p in s.jugadores[jid]["plantillas"] if pl.es_aprendida(p))
+
+    casos = [("poco_parecido", mezcla((0.30, ua)), "medio", "< umbral_duda contra sus fotos de inscripción"),
+             ("no_es_el_mejor", mezcla((0.50, ua), (0.60, ub)), "medio", "se parece más a otro jugador"),
+             ("sin_margen", mezcla((0.55, ua), (0.53, ub)), "medio", "margen < MARGEN_MIN sobre el segundo"),
+             ("casi_duplicado", mezcla((0.95, ua)), "medio", "casi duplicado (cos > 0.92)"),
+             ("rechazado_bajo", mezcla((0.60, ua)), "bajo", "pendiente RECHAZADO de baja calidad")]
+    for cod, emb, par, txt in casos:
+        ok, motivo, _ = s.evaluar_correccion(a, emb, par)
+        r = asignar(emb, a, par)
+        check(not ok and motivo == cod and r["foto_guardada"] is False and r["motivo"] == pl.MOTIVOS_APRENDIZAJE[cod]
+              and n_corr(a) == 0, f"aprendizaje: NO aprende si {txt}", (motivo, r))
+    r = asignar(mezcla((0.60, ua)), a)
+    check(r["foto_guardada"] is True and n_corr(a) == 1, "aprendizaje: aprende si pasa la regla (0.60, mejor, margen)", r)
+
+    # -- tope de aprendidas: se reemplaza la más antigua, nunca la inscripción
+    primera = max(f["id"] for f in s.db.fotos_detalle(MOD) if f["origen"] == "correccion")
+    for _ in range(5):
+        assert asignar(mezcla((0.60, ua)), a)["foto_guardada"]
+    filas = [f for f in s.db.fotos_detalle(MOD) if f["jugador_id"] == a]
+    corr = [f["id"] for f in filas if f["origen"] == "correccion"]
+    check(len(corr) == pl.MAX_APRENDIDAS == 4 and sum(f["origen"] == "inscripcion" for f in filas) == 3
+          and n_corr(a) == 4 and primera not in corr and corr == list(range(primera + 2, primera + 6)),
+          "tope: 6 aprendidas -> quedan las 4 más nuevas; las 3 de inscripción intactas (BD y memoria)", filas)
+
+    # -- par cercano: aviso al inscribir, persistente, fuerza DUDOSO sin holgura
+    s = sede("sede-par")
+    ux = u()
+    x = inscribir(s, "Xime", ux)
+    y = inscribir(s, "Yael", mezcla((0.35, ux)))
+    z = inscribir(s, "Zoe", u())
+    av = s.revisar_parecidos(y)
+    check(av is not None and av["jugador_id"] == x and abs(av["similitud"] - 0.35) < 1e-3
+          and av["mensaje"].startswith("Se parece a Xime (0.35)") and "confirmación siempre" in av["mensaje"],
+          "inscripción: similitud >= 0.30 con otro jugador -> aviso 'se parece a X (0.35)'", av)
+    check(s.revisar_parecidos(z) is None, "inscripción: sin parecidos (< 0.30) -> sin aviso")
+    s2_ = nucleo.Sede("sede-par", "sede-par")
+    check(s2_.es_par_cercano(x, y) and s2_.es_par_cercano(y, x) and not s2_.es_par_cercano(x, z),
+          "par cercano persistente (tabla pares_cercanos) tras recargar la sede", s2_.pares)
+    sonda = mezcla((0.47, ux))
+    mid, sc, sid, sg = s.dos_mejores(sonda)
+    res = cv_engine.decidir(sc, sg, 0.42, 0.37, cv_engine.MARGEN_MIN, par_cercano=s.es_par_cercano(mid, sid))
+    check(mid == x and sid == y and res == "dudoso" and cv_engine.decidir(sc, sg, 0.42, 0.37) == "aceptado",
+          "par cercano: mejor y segundo forman el par y 0.47 < 0.42+0.10 -> DUDOSO (sin par sería ACEPTADO)",
+          (mid, sc, sid, sg, res))
+    check(cv_engine.decidir(0.53, 0.20, 0.42, 0.37, 0.04, par_cercano=True) == "aceptado"
+          and cv_engine.decidir(0.30, 0.10, 0.42, 0.37, 0.04, par_cercano=True) == "rechazado",
+          "par cercano: con holgura (0.53) acepta; bajo duda sigue RECHAZADO")
+
+    # -- reparar_plantillas: dry-run no toca nada; --aplicar respalda y borra solo 'correccion' dudosas
+    s = sede("sede-rp")
+    up, uq = u(), u()
+    p_ = inscribir(s, "Pepa", up)
+    q_ = inscribir(s, "Quena", uq)
+    s.db.add_foto(p_, mezcla((0.80, up)), MOD, "nueva_foto")
+    s.db.add_foto(p_, mezcla((0.10, up)), MOD, "correccion")                 # poco parecida a su jugador
+    s.db.add_foto(p_, mezcla((0.40, up), (0.50, uq)), MOD, "correccion")     # más parecida a otro jugador
+    s.db.add_foto(p_, mezcla((0.60, up)), MOD, "correccion")                 # buena: se conserva
+    ruta_db = data / "sedes" / "sede-rp" / "asistencia.db"
+
+    def fotos_rp():
+        with sqlite3.connect(ruta_db) as conn:
+            return sorted(conn.execute("SELECT id, origen FROM fotos WHERE jugador_id = ?", (p_,)).fetchall())
+
+    antes = fotos_rp()
+    env = {**os.environ, "DATA_DIR": str(data), "PYTHONIOENCODING": "utf-8"}
+    r = subprocess.run([PY, "scripts/reparar_plantillas.py", "--sede", "sede-rp"], cwd=ROOT, env=env,
+                       capture_output=True, text=True, encoding="utf-8")
+    corr_ids = [i for i, o in antes if o == "correccion"]
+    check(r.returncode == 0 and "DRY-RUN" in r.stdout and f"dudosas: 2 {corr_ids[:2]}" in r.stdout
+          and fotos_rp() == antes and not list((ruta_db.parent / "respaldos").glob("*reparar_plantillas*")),
+          "reparar dry-run: detecta las 2 'correccion' dudosas y no cambia nada", r.stdout[-1500:] + r.stderr[-800:])
+    r = subprocess.run([PY, "scripts/reparar_plantillas.py", "--sede", "sede-rp", "--aplicar"], cwd=ROOT, env=env,
+                       capture_output=True, text=True, encoding="utf-8")
+    despues = fotos_rp()
+    respaldos = list((ruta_db.parent / "respaldos").glob("asistencia_*_reparar_plantillas.db"))
+    ok_resp = False
+    if respaldos:
+        with sqlite3.connect(respaldos[0]) as conn:
+            ok_resp = conn.execute("SELECT COUNT(*) FROM fotos WHERE jugador_id = ?", (p_,)).fetchone()[0] == len(antes)
+    check(r.returncode == 0 and ok_resp and despues == [f for f in antes if f[0] not in corr_ids[:2]]
+          and sum(o == "inscripcion" for _, o in despues) == 3 and any(o == "nueva_foto" for _, o in despues)
+          and "reinicia la API" in r.stdout,
+          "reparar --aplicar: respaldo con sello en respaldos/, borra solo las 2 dudosas (inscripción, nueva_foto y "
+          "la buena intactas)", (antes, despues, r.stdout[-800:], r.stderr[-800:]))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fotos", type=Path, help="carpeta con img1.jpg, img3.jpg, ... (si no, se descargan)")
@@ -1478,6 +1668,8 @@ def main() -> int:
         print(f"Iniciando API en el puerto {srv.puerto} (warmup del modelo)...")
         srv.iniciar()
         ejecutar(Cliente(f"http://127.0.0.1:{srv.puerto}"), srv, F)
+        srv.detener()  # libera memoria: las pruebas de plantillas cargan el motor en este proceso
+        pruebas_plantillas(tmp)
     except Exception as exc:
         import traceback
         traceback.print_exc()

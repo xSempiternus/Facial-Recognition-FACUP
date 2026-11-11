@@ -26,6 +26,7 @@ from api import auth, limites, nucleo, sombra
 from api.exportes import router as exportes_router
 from api.inscripcion import router as inscripcion_router
 from api.metricas import router as metricas_router
+from api.publica import router as publica_router
 from api.nucleo import (Sede, analizar as _analyze, error as _error, log, obtener_sede as _obtener_sede,
                         plantillas_sombra as _plantillas_sombra, precalentar_nombre, sede_publica, sede_staff)
 from api.revision import router as revision_router
@@ -145,6 +146,7 @@ app.include_router(voz_router)
 app.include_router(inscripcion_router)
 app.include_router(revision_router)
 app.include_router(metricas_router)
+app.include_router(publica_router)
 app.include_router(seguimiento_router)
 app.include_router(exportes_router)
 
@@ -363,6 +365,9 @@ async def enroll(
         s.jugadores[jugador_id] = {"nombre": nombre, "categoria": categoria, "estado": "activo",
                                    "plantillas": [(modelo, e) for e in embeddings]
                                    + [(m, e) for m, es in extras.items() if m != modelo for e in es]}
+    parecido = s.revisar_parecidos(jugador_id)  # par cercano (>= 0.30): aviso + el kiosko pedirá confirmación
+    if parecido:
+        avisos.append(parecido["mensaje"])
     precalentar_nombre(nombre)  # voz lista antes de que llegue a la cancha
     return {
         "status": "success",
@@ -371,6 +376,7 @@ async def enroll(
         "categoria": categoria,
         "fotos": len(embeddings),
         "avisos": avisos,
+        "parecido": parecido,  # {jugador_id, nombre, similitud, mensaje} o None
         "calidad": [{k: c[k] for k in ("num_rostros", "confianza", "tamano_rostro")} for c in caras],
     }
 
@@ -419,7 +425,7 @@ async def verify(request: Request, file: UploadFile = File(...), s: Sede = Depen
     def clasificar(face):
         mejor_id, score, segundo_id, segundo = s.dos_mejores(face["embedding"])
         res = cv_engine.decidir(score if mejor_id is not None else None, segundo, umbral_auto, umbral_duda,
-                                cv_engine.MARGEN_MIN)
+                                cv_engine.MARGEN_MIN, par_cercano=s.es_par_cercano(mejor_id, segundo_id))
         return res, mejor_id, score, segundo_id, segundo
 
     try:

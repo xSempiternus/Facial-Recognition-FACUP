@@ -13,6 +13,8 @@ from deepface.modules import detection as _deteccion
 from deepface.modules import modeling as _modeling
 from deepface.modules.exceptions import SpoofDetected
 
+from src.plantillas import MARGEN_PAR_CERCANO
+
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 
 # Cada sede tiene su propia configuración (data/sedes/<slug>/config.json); las funciones de análisis reciben
@@ -27,6 +29,10 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "data" / "config.json"
 #             >= MARGEN_MIN;
 #   DUDOSO    : similitud >= umbral_duda pero no se cumple lo anterior (pasa al staff con sugerencia, sin nombre);
 #   RECHAZADO : similitud < umbral_duda.
+#   Par cercano: si el mejor y el segundo son un par parecido registrado al inscribir (pares_cercanos), solo se
+#   acepta con similitud >= umbral + MARGEN_PAR_CERCANO (0.10); si no, DUDOSO.
+# "similitud" de un jugador = puntaje robusto (src/plantillas.py): máximo sobre sus fotos de inscripción, con las
+# aprendidas por corrección del staff ponderadas x0.9 (mitiga el efecto "hub").
 # `umbral` = umbral de aceptación automática; `umbral_duda` = umbral de duda (<= umbral).
 # Compatibilidad: una config SIN `umbral_duda` (formato antiguo, p. ej. {"umbral": 0.37}) se interpreta así: el
 # `umbral` antiguo pasa a ser el de duda y el automático es antiguo + UMBRAL_AUTO_OFFSET (0.37 -> duda 0.37,
@@ -108,11 +114,15 @@ def normalizar_umbrales(cfg: dict) -> dict:
 
 
 def decidir(mejor: float | None, segundo: float | None, umbral_auto: float, umbral_duda: float,
-            margen_min: float = MARGEN_MIN) -> str:
-    """'aceptado' | 'dudoso' | 'rechazado'. `segundo`: puntaje del segundo mejor JUGADOR distinto (None si no hay)."""
+            margen_min: float = MARGEN_MIN, par_cercano: bool = False) -> str:
+    """'aceptado' | 'dudoso' | 'rechazado'. `segundo`: puntaje del segundo mejor JUGADOR distinto (None si no hay).
+    `par_cercano`: el mejor y el segundo candidato son un par de jugadores parecidos entre sí (tabla
+    pares_cercanos): solo se acepta solo con holgura (>= umbral_auto + MARGEN_PAR_CERCANO); si no, DUDOSO."""
     if mejor is None or mejor < umbral_duda:
         return "rechazado"
     margen = mejor - segundo if segundo is not None else float("inf")
+    if par_cercano and mejor < umbral_auto + MARGEN_PAR_CERCANO - 1e-9:
+        return "dudoso"
     if mejor >= umbral_auto and margen >= margen_min - 1e-9:  # tolerancia de redondeo float
         return "aceptado"
     return "dudoso"

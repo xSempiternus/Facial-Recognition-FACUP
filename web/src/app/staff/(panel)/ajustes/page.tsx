@@ -1,13 +1,14 @@
 "use client";
 
-import { CircleHelp, Download, FlaskConical, Save, Share, ShieldCheck, Smartphone } from "lucide-react";
+import { CircleHelp, Download, FlaskConical, Globe, Save, Share, ShieldCheck, Smartphone } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Actividad } from "@/components/staff/Actividad";
 import { Categorias } from "@/components/staff/Categorias";
 import { reiniciarTours } from "@/components/staff/Tour";
 import { Alerta, Badge, Button, Campo, Dialogo, ErrorCarga, PageHeader, SkeletonRows, Vacio, useQuery, useToast } from "@/components/staff/ui";
 import { estaInstalada, esIOS, type EventoInstalar } from "@/lib/pwa";
-import { ApiError, api, descargarRespaldo, textoError, type Config } from "@/lib/staff-api";
+import { ApiError, api, descargarRespaldo, esUrlLocal, fijarPublica, textoError, type Config } from "@/lib/staff-api";
+import { useUrlPublica } from "@/lib/use-url-publica";
 
 function VerGuias() {
   const notificar = useToast();
@@ -27,6 +28,70 @@ function VerGuias() {
     <Button sm variante="ghost" cargando={trabajando} onClick={reiniciar}>
       {!trabajando && <CircleHelp size={14} aria-hidden />} Volver a ver las guías
     </Button>
+  );
+}
+
+const ORIGEN_TEXTO = { ajuste: "guardada aquí en Ajustes", env: "variable de entorno PUBLIC_URL", archivo: "detectada por el lanzador (túnel)" } as const;
+
+function DireccionPublica() {
+  const notificar = useToast();
+  const { publica } = useUrlPublica();
+  const [valor, setValor] = useState<string | null>(null);
+  const [trabajando, setTrabajando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const campo = valor ?? (publica?.origen === "ajuste" ? (publica.url ?? "") : "");
+
+  async function guardar(url: string) {
+    setTrabajando(true);
+    setError(null);
+    try {
+      fijarPublica(await api.guardarPublica(url));
+      setValor(null);
+      notificar(url.trim() ? "Dirección pública guardada" : "Ajuste quitado");
+    } catch (e) {
+      setError(textoError(e, "No se pudo guardar la dirección."));
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
+  return (
+    <section className="s-card" aria-labelledby="pub">
+      <div className="s-card-h">
+        <div>
+          <h2 id="pub" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <Globe size={15} aria-hidden /> Dirección pública
+          </h2>
+          <p>Pega aquí la dirección https que usan los apoderados; se detecta sola si usas iniciar.bat con túnel.</p>
+        </div>
+      </div>
+      <div className="s-card-b" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {!publica ? (
+          <SkeletonRows n={1} />
+        ) : publica.url ? (
+          <Alerta tono={esUrlLocal(publica.url) ? "warn" : "ok"}>
+            Los enlaces para apoderados usan <strong>{publica.url}</strong> ({ORIGEN_TEXTO[publica.origen ?? "ajuste"]}).
+            {esUrlLocal(publica.url) && " Es una dirección local: no funciona desde otros teléfonos."}
+          </Alerta>
+        ) : (
+          <Alerta>Sin dirección pública: los enlaces solo funcionan en este equipo.</Alerta>
+        )}
+        <Campo etiqueta="Dirección (ajuste)" ayuda="Ejemplo: https://inscripcion.miclub.cl. Sin ruta. Deja vacío para volver a la automática.">
+          {(id) => (
+            <input id={id} className="s-input" type="url" inputMode="url" autoComplete="off" placeholder="https://" value={campo} onChange={(e) => setValor(e.target.value)} />
+          )}
+        </Campo>
+        {error && <Alerta tono="err">{error}</Alerta>}
+        <div className="s-row">
+          <Button variante="primary" cargando={trabajando} disabled={valor === null} onClick={() => guardar(campo)}>
+            <Save size={15} aria-hidden /> Guardar
+          </Button>
+          {publica?.origen === "ajuste" && (
+            <Button disabled={trabajando} onClick={() => guardar("")}>Quitar ajuste</Button>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -108,6 +173,7 @@ export default function Ajustes() {
       </PageHeader>
       {cfg.data ? <Reconocimiento key={JSON.stringify(cfg.data)} cfg={cfg.data} total={jug.data?.length ?? 0} onGuardado={cfg.reload} /> : <div className="s-card"><SkeletonRows n={5} /></div>}
       <Categorias />
+      <DireccionPublica />
       <Respaldos query={resp} />
       <Actividad />
       <InstalarApp />

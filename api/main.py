@@ -395,6 +395,15 @@ def _log_verificacion(s: Sede, resultado: str, t0: float, mejor_id: int | None =
         return None
 
 
+# Otra cara con al menos este % del área de la principal: se rechaza (no se adivina a quién se quiso registrar).
+OTRA_CARA_MAX = 0.35
+
+
+def _exigir_una_persona(face: dict) -> None:
+    if face.get("otra_cara", 0.0) >= OTRA_CARA_MAX:
+        _error(422, "varias_caras", "Hay más de una persona frente a la cámara.")
+
+
 @app.post("/verify")
 async def verify(request: Request, file: UploadFile = File(...), s: Sede = Depends(sede_publica)):
     """Público. Compara SOLO contra los jugadores de la sede del header X-Sede (o ?sede=, o la por defecto).
@@ -434,9 +443,11 @@ async def verify(request: Request, file: UploadFile = File(...), s: Sede = Depen
         # referencia, que es el que decide. (Si el rápido ya cayó solo al de referencia, `face["rapido"]` es False y
         # no se repite el mismo análisis.)
         face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, rapido=True, publico=True)
+        _exigir_una_persona(face)
         res, jugador_id, score, segundo_id, segundo = clasificar(face)
         if face.get("rapido") and (res != "aceptado" or score < umbral_auto + MARGEN_VERIFICACION_RAPIDA):
             face = await _analyze(s, file, miniatura=True, antispoofing=antispoofing, publico=True)
+            _exigir_una_persona(face)
             res, jugador_id, score, segundo_id, segundo = clasificar(face)
     except HTTPException as exc:
         cod = exc.detail.get("codigo") if isinstance(exc.detail, dict) else None

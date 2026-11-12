@@ -12,7 +12,28 @@ import { calidadActual, type Calidad } from "./calidad";
 import { PUNTOS_REF, type Rastro } from "./rastro";
 import { recortarCara } from "@/lib/recorte-cara";
 
-export type Postura = "sin-cara" | "lejos" | "cerca" | "descentrado" | "quieto";
+export type Postura = "sin-cara" | "varias" | "lejos" | "cerca" | "descentrado" | "quieto";
+
+// Otra cara con al menos este % de la altura de la principal cuenta como "hay más de una persona".
+const UMBRAL_OTRA_CARA = 0.4;
+const MARGEN_BORDE = 0.015; // cara tocando el borde del cuadro (normalizado) = cortada
+
+function altoCaja(c: NormalizedLandmark[] | undefined) {
+  if (!c) return 0;
+  let a = 1, b = 0;
+  for (const p of c) {
+    if (p.y < a) a = p.y;
+    if (p.y > b) b = p.y;
+  }
+  return b - a;
+}
+
+function caraCortada(c: NormalizedLandmark[]) {
+  for (const p of c) {
+    if (p.x < MARGEN_BORDE || p.x > 1 - MARGEN_BORDE || p.y < MARGEN_BORDE || p.y > 1 - MARGEN_BORDE) return true;
+  }
+  return false;
+}
 /** Hacia dónde está la cara respecto del centro del marco (para decir "sube", "baja", etc.). */
 export type Desvio = "arriba" | "abajo" | "izq" | "der";
 export type Objetivo = { cx: number; cy: number; r: number }; // círculo central, en px de pantalla
@@ -104,7 +125,7 @@ export function useRastreoCara({
           FaceLandmarker.createFromOptions(archivos, {
             baseOptions: { modelAssetPath, delegate },
             runningMode: "VIDEO",
-            numFaces: 1,
+            numFaces: 2,
           });
         let fl: FaceLandmarker | null = null;
         let ultimoError: unknown = null;
@@ -177,7 +198,13 @@ export function useRastreoCara({
       const H = esc?.offsetHeight || window.innerHeight;
 
       const resultado = fl.detectForVideo(v, ahora);
-      const puntos = resultado.faceLandmarks[0];
+      // Cara principal = la de caja más grande (no la "primera" que devuelve el modelo). Si hay otra cara
+      // de tamaño comparable, o la principal está cortada por el borde, no se captura: evita registrar a
+      // quien sale a medias en el cuadro en lugar de quien está al frente.
+      const caras = [...resultado.faceLandmarks].sort((a, b) => altoCaja(b) - altoCaja(a));
+      const puntos = caras[0];
+      const varias = caras.length > 1 && altoCaja(caras[1]) >= altoCaja(caras[0]) * UMBRAL_OTRA_CARA;
+      const cortada = Boolean(puntos) && caraCortada(puntos);
       hayCara = Boolean(puntos);
       landmarksRef.current = puntos ? { t: ahora, puntos } : null;
 
@@ -236,7 +263,9 @@ export function useRastreoCara({
         const { cx, cy, r } = objetivo.current;
         const distancia = Math.hypot(centro.x - cx, centro.y - cy);
 
-        if (alto < r * 0.95) nueva = "lejos";
+        if (varias) nueva = "varias";
+        else if (cortada) nueva = "descentrado";
+        else if (alto < r * 0.95) nueva = "lejos";
         else if (alto > r * 2.05) nueva = "cerca";
         else if (distancia > r * 0.38) nueva = "descentrado";
         else nueva = "quieto";

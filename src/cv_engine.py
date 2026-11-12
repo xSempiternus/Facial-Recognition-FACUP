@@ -233,7 +233,9 @@ def _analizar_rapido(img: np.ndarray, miniatura: bool, cfg: dict) -> dict:
     recorte = np.ascontiguousarray(cara.img)
     emb = embedding_recorte(recorte, cfg["modelo"])
     a = cara.facial_area
-    resultado = {"embedding": emb, "num_rostros": len(caras),
+    areas = sorted(((o["facial_area"][2] - o["facial_area"][0]) * (o["facial_area"][3] - o["facial_area"][1])
+                    for o in caras.values()), reverse=True)
+    resultado = {"embedding": emb, "num_rostros": len(caras), "otra_cara": (areas[1] / areas[0]) if len(areas) > 1 and areas[0] else 0.0,
                  "confianza": float(c["score"]), "tamano_rostro": a.w / ancho, "rapido": True,
                  "ms_deteccion": ms_deteccion, "_recorte": recorte}
     if miniatura:
@@ -271,6 +273,12 @@ def analyze_face(image_bytes: bytes, miniatura: bool = False, antispoofing: bool
     return resultado
 
 
+def _ratio_otra_cara(faces: list) -> float:
+    """Área de la segunda cara más grande / área de la principal (0 si hay una sola)."""
+    areas = sorted((f["facial_area"]["w"] * f["facial_area"]["h"] for f in faces), reverse=True)
+    return (areas[1] / areas[0]) if len(areas) > 1 and areas[0] else 0.0
+
+
 def _analizar_referencia(img: np.ndarray, miniatura: bool, antispoofing: bool, cfg: dict) -> dict:
     """Equivale exactamente a DeepFace.represent(detector, align=True) (mismo extract_faces, misma conversión
     RGB->BGR, mismo resize), pero en dos pasos para conservar el recorte alineado de la cara principal."""
@@ -300,6 +308,7 @@ def _analizar_referencia(img: np.ndarray, miniatura: bool, antispoofing: bool, c
     resultado = {
         "embedding": emb,
         "num_rostros": len(faces),
+        "otra_cara": _ratio_otra_cara(faces),
         "confianza": float(main_face.get("confidence") or 0.0),
         "tamano_rostro": main_face["facial_area"]["w"] / img.shape[1],
         "_recorte": recorte,

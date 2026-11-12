@@ -60,6 +60,7 @@ const animo = () => ANIMOS[Math.floor(Math.random() * ANIMOS.length)];
 
 const GUIA: Record<Postura, { titulo: string; sub: string }> = {
   "sin-cara": { titulo: "Párate frente a la pantalla", sub: "Mira a la cámara, sin prisa" },
+  varias: { titulo: "Una persona a la vez", sub: "Que solo se vea tu cara en la pantalla" },
   lejos: { titulo: "Acércate un poco", sub: "Llena el marco con tu cara" },
   cerca: { titulo: "Aléjate un poco", sub: "Estás muy cerca de la cámara" },
   descentrado: { titulo: "Centra tu cara", sub: "Ponla dentro del marco" },
@@ -137,6 +138,8 @@ function aResultado(v: Verificacion): { resultado: Resultado; frase: Frase | nul
   switch (v.codigo) {
     case "sin_rostro":
       return { resultado: { tono: "aviso", titulo: "No detectamos tu cara", sub: "Mira de frente a la cámara, con buena luz" }, frase: { texto: "No detectamos tu cara. Prueba otra vez.", tipo: "sin_cara" } };
+    case "varias_caras":
+      return { resultado: { tono: "aviso", titulo: "Una persona a la vez", sub: "Que solo se vea tu cara en la pantalla" }, frase: { texto: "Una persona a la vez, por favor.", tipo: "sin_cara" } };
     case "foto_falsa":
       return { resultado: { tono: "aviso", titulo: "Usa tu cara, no una foto", sub: "Ponte tú frente a la cámara" }, frase: { texto: "Usa tu cara, no una foto.", tipo: "foto" } };
     case "no_reconocido":
